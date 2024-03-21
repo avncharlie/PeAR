@@ -4,3 +4,10 @@ pyrightconfig.json
 __pycache__/
 .mypy_cache/
 .pylintrc
+.vscode/
+*.pdb
+*.exe
+*.obj
+*.ilk
+*.proc.log
+.venv/

@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 
-docker build -t add_nop_image .
+docker build -t pear_image .

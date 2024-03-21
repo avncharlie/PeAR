@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# To run without docker, make sure dependencies are install (see Dockerfile), then just: python -m pear ARGS
+
 # Working directory is bind mounted under /workspace.
 # Use this to send and recieve binaries for instrumentation.
 
@@ -10,7 +12,7 @@ IR_CACHE="/Users/alvin/Documents/Uni/Honours/ir_cache"
 # This is probably/definitely not secure due to bind mounting the ssh keys
 docker run --platform linux/amd64 --rm --name=rewrite_container \
     -v $(pwd):/workspace \
-    -v $(pwd)/add_nop:/add_nop \
+    -v $(pwd)/pear:/pear \
     -v "$IR_CACHE":/ir_cache \
     -v ~/.ssh:/root/.ssh \
-    -it add_nop_image "$@"
+    -it pear_image "$@"
