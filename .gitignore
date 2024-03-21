@@ -1,0 +1,6 @@
+.DS_Store
+
+pyrightconfig.json
+__pycache__/
+.mypy_cache/
+.pylintrc
