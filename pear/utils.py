@@ -1,7 +1,13 @@
-from collections import OrderedDict
-import logging
-import typing
+# Generic utility functions
+
+import sys
 import uuid
+import shutil
+import logging
+import subprocess
+from typing import Optional
+from abc import ABC, abstractmethod
+from collections import OrderedDict
 
 import gtirb
 import gtirb_functions
@@ -11,6 +17,57 @@ from gtirb_rewriting import (
 )
 
 log = logging.getLogger(__name__)
+
+def run_cmd(cmd: list[str],
+            check: Optional[bool]=True,
+            print: Optional[bool]=True,
+            working_dir: Optional[str]= None) -> tuple[bytes, int]:
+    """
+    Run command and capture its output and return code. Stream command stdout
+    and stderr to stdout as it is produced. Not very efficient.
+
+    :param cmd: command to run.
+    :param check: True if exception should be raised on command failure
+    :param print: True if command output should be printed
+    :param working_dir: Working directory command should be executed in. Will
+        execute in current dir by default.
+    :returns: A tuple of (command output, return code)
+    """
+    # TODO: remove colours
+    green = '\033[92m'
+    blue = '\033[94m'
+    end = '\033[0m'
+    log.info("Executing: " + green +  " ".join(cmd) + end)
+    output = b""
+
+    process : subprocess.Popen = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                                  stderr=subprocess.STDOUT,
+                                                  cwd=working_dir)
+    for c in iter(lambda: process.stdout.read(1), b""):
+        if print:
+            sys.stdout.buffer.write(c)
+            sys.stdout.buffer.flush()
+        output += c
+
+    r_code = process.wait()
+
+    if check and r_code != 0:
+        raise subprocess.CalledProcessError(r_code, cmd)
+    return (output, r_code)
+
+def check_executables_exist(to_check: list[str]) -> bool:
+    """
+    Check required executables exist
+
+    :param to_check: list of executable names to check
+    :returns: if executables exist
+    """
+    found = True
+    for e in to_check:
+        if not shutil.which(e):
+            log.error(f'"{e}" not found, install it or add it to path.')
+            found = False
+    return found
 
 def get_address_to_codeblock_mappings(ir: gtirb.IR) -> OrderedDict[int, uuid.UUID]:
     """
@@ -141,6 +198,17 @@ def get_basic_blocks(function: gtirb_functions.Function) -> list[list[gtirb.Code
 
     return blocks
 
+# Architecture specific utility function
+class ArchUtils(ABC):
+    @abstractmethod
+    def backup_registers(label: str):
+        '''
+        Generate asm for backing up registers to given label
+        :param label: label to backup registers to
+        '''
+        pass
+
+
 def backup_regs_x86(label: str):
     '''
     Generate asm for backing up x86 registers to given label
@@ -184,4 +252,3 @@ def restore_regs_x86(label: str):
         movaps xmm6, XMMWORD PTR [{label} + 0x80]
         movaps xmm7, XMMWORD PTR [{label} + 0x90]
     '''
-

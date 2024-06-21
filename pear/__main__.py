@@ -1,21 +1,16 @@
 import os
 import sys
 import time
-import shutil
 import logging
 import pathlib
 import textwrap
 import argparse
 
 import gtirb
-from gtirb_rewriting import PassManager
 
-from .gtirb_wrappers import ddisasm, gtirb_pprinter
-from .winafl_pass import (
-    AddWinAFLDataPass,
-    AddWinAFLPass
-)
-from . import utils
+from .ddisasm import ddisasm
+from . import REWRITERS, REWRITER_MAP
+from .rewriters.rewriter import Rewriter
 
 #format="%(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)",
 
@@ -30,17 +25,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__package__)
 
-
-def get_args() -> argparse.Namespace:
-    """
-    Parse command line arguments for PeAR
-
-    :returns: parsed arguments
-    """
-    # TODO: update description
-    parser = argparse.ArgumentParser(
-        description= textwrap.dedent(f'''\
-Add WinAFL-compatible static fuzzing instrumentation to binaries.
+def main_descriptions():
+    return '''\
+Add static fuzzing instrumentation to binaries.
 
 Producing instrumented assembly can be done on any environment with
 gtirb-pprinter installed. 
@@ -48,19 +35,39 @@ gtirb-pprinter installed.
 Producing an instrumented binary requires PeAR to be run on a platform that can
 build the instrumented binary. E.g. to produce an instrumented 64-bit Windows
 binary 64-bit MSVS compiler tools must be installed and to produce a Linux
-binary GCC must be installed.
+binary GCC must be installed.'''
+# example usage:
+# - Instrument binary and produce new binary
+#   python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --gen-binary --target-func ADDR
+# - Instrument binary and cache IR and produce instrumented assembly
+#   python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --gen-asm --target-func ADDR
+# - Instrument binary and cache IR and produce instrumented binary and assembly (recommended)
+#   python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --gen-asm --gen-binary --target-func ADDR
+# - Instrument GTIRB IR and produce instrumented GTIRB IR
+#   python3 -m pear --input-IR IR_FILE --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --target-func ADDR'''
 
-example usage:
-- Instrument binary and produce new binary
-  python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --gen-binary --target-func ADDR
-- Instrument binary and cache IR and produce instrumented assembly
-  python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --gen-asm --target-func ADDR
-- Instrument binary and cache IR and produce instrumented binary and assembly (recommended)
-  python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --gen-asm --gen-binary --target-func ADDR
-- Instrument GTIRB IR and produce instrumented GTIRB IR
-  python3 -m pear --input-IR IR_FILE --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --target-func ADDR
-        '''),
-        formatter_class=argparse.RawTextHelpFormatter
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command line arguments for PeAR
+
+    :returns: parsed arguments
+    """
+    # using hack here: https://stackoverflow.com/a/57582191
+    # to display optional and required keyword arguments nicely
+    parser = argparse.ArgumentParser(
+        prog='PeAR',
+        description=main_descriptions(),
+        formatter_class=argparse.RawTextHelpFormatter,
+        add_help=False
+    )
+    required = parser.add_argument_group('required arguments')
+    optional = parser.add_argument_group('optional arguments')
+    optional.add_argument(
+        '-h',
+        '--help',
+        action='help',
+        default=argparse.SUPPRESS,
+        help='Show this help message and exit'
     )
 
     def path_exists(f):
@@ -70,16 +77,6 @@ Hint: running a docker container? Check volume mount location')
         else:
             return f
 
-    def is_hex_address(loc):
-        try:
-            return int(loc, 16)
-        except ValueError:
-            parser.error(f'Can\'t parse "{loc}" as address, please provide hex address (e.g. 0x75a0)')
-
-    # show required arguments in seperate header when displaying help
-    required = parser.add_argument_group('required arguments')
-
-    # take IR or binary as input
     input = required.add_mutually_exclusive_group(required=True)
     input.add_argument(
         '--input-ir', type=path_exists,
@@ -93,12 +90,7 @@ Hint: running a docker container? Check volume mount location')
         '--output-dir', required=True, type=path_exists,
         help="Directory to store temporary files and instrumentation results."
     )
-    required.add_argument(
-        '--target-func', required=True, type=is_hex_address,
-        help="Address of target function that will be interrogated during fuzzing"
-    )
-
-    parser.add_argument(
+    optional.add_argument(
         '--gen-binary', action='store_true', required=False,
         help=textwrap.dedent('''\
             Build instrumented binary. Requires gtirb-pprinter to be installed,
@@ -107,16 +99,14 @@ Hint: running a docker container? Check volume mount location')
             seperate machine.
          ''')
     )
-    parser.add_argument(
+    optional.add_argument(
         '--gen-asm', action='store_true', required=False,
         help=textwrap.dedent('''\
             Generate instrumented assembly. Requires gtirb-pprinter to be
             installed.
         ''')
     )
-
-    # ir cache
-    parser.add_argument(
+    optional.add_argument(
         '--ir-cache', required=False, type=path_exists,
         help=textwrap.dedent('''\
             Dir to use to store generated IRs. Avoids repeatedly disassembling
@@ -124,12 +114,23 @@ Hint: running a docker container? Check volume mount location')
         ''')
     )
 
+    # Add rewriter subcommands
+    rewriter_parsers = parser.add_subparsers(dest='rewriter',
+                                             help='Available rewriters',
+                                             required=True)
+
+    for r in REWRITERS:
+        r_name, r_desc = r.get_info()
+        r_parser = rewriter_parsers.add_parser(r_name, help=r_desc)
+        r.build_parser(r_parser)
+
     args = parser.parse_args()
+    args.rewriter = REWRITER_MAP[args.rewriter]
 
     return args
 
 if __name__ == "__main__":
-    args = get_args()
+    args = parse_args()
 
     # Generate (and cache) IR if binary provided
     if args.input_binary: 
@@ -153,53 +154,19 @@ if __name__ == "__main__":
     diff = round(time.time()-start_t, 3)
     log.info(f'IR loaded in {diff} seconds')
 
-    # Store addresses of basic blocks before our instrumentation modifies this
-    mappings = utils.get_address_to_codeblock_mappings(ir)
+    # Run chosen rewriter
+    rewriter: Rewriter = args.rewriter(ir, args)
+    instrumented_ir = rewriter.rewrite()
 
-    # Instrument!
-    passes = [
-        AddWinAFLDataPass(),
-        AddWinAFLPass(mappings, args.target_func)
-    ]
-    for p in passes:
-        manager = PassManager()
-        manager.add(p)
-        manager.run(ir)
-
-    # Save modified IR
+    # Save instrumented IR
     instrumented_ir_fname = f'{os.path.join(args.output_dir, basename)}.instrumented.gtirb'
-    ir.save_protobuf(instrumented_ir_fname)
+    instrumented_ir.save_protobuf(instrumented_ir_fname)
     log.info(f'Instrumented IR saved to: {instrumented_ir_fname}')
 
+    # Generate assembly or binary if needed
     if args.gen_asm or args.gen_binary:
-        # Try to pick suitable output filename
         output_basename= f'{os.path.join(args.output_dir, basename)}.instrumented'.replace('.exe', '')
-
-        # Generate output binary / assembly
-        gtirb_pprinter(instrumented_ir_fname, ir, output_basename, args.output_dir, 
-                    gen_assembly=args.gen_asm, gen_binary=args.gen_binary)
-
-        ## always gen asm locally 
-        # if args.gen_asm:
-        #    output_file += '.S'
-        #    gtirb_pprinter(instrumented_ir_fname, ir, output_file, args.output_dir,
-        #                gen_assembly=True)
-        #    log.info(f'Generated assembly saved to: {output_file}')
-
-        # ssh_address=None
-        # remote_working_dir=None
-        # skip_check=None
-        # if args.build_server:
-        #    ssh_address=args.build_server
-        #    remote_working_dir=args.build_server_working_dir
-        #    skip_check=args.skipdir_check
-
-        # if args.gen_binary:
-        #    output_file += '.exe'
-        #    gtirb_pprinter(instrumented_ir_fname, ir, output_file, args.output_dir,
-        #                gen_binary=True,
-        #                ssh_address=args.build_server,
-        #                static_lib_link=r"C:\Users\alvin\Documents\lib-testing\32\afl-staticinstr.obj",
-        #                remote_working_dir=args.build_server_working_dir,
-        #                checkdir_exists=skip_check)
-        #    log.info(f'Generated binary saved to: {output_file}')
+        rewriter.generate(instrumented_ir_fname,
+                          output_basename, args.output_dir,
+                          gen_assembly=args.gen_asm,
+                          gen_binary=args.gen_binary)
