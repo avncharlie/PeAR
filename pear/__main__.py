@@ -29,22 +29,22 @@ def main_descriptions():
     return '''\
 Add static fuzzing instrumentation to binaries.
 
-Producing instrumented assembly can be done on any environment with
-gtirb-pprinter installed. 
-
 Producing an instrumented binary requires PeAR to be run on a platform that can
 build the instrumented binary. E.g. to produce an instrumented 64-bit Windows
-binary 64-bit MSVS compiler tools must be installed and to produce a Linux
-binary GCC must be installed.'''
-# example usage:
-# - Instrument binary and produce new binary
-#   python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --gen-binary --target-func ADDR
-# - Instrument binary and cache IR and produce instrumented assembly
-#   python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --gen-asm --target-func ADDR
-# - Instrument binary and cache IR and produce instrumented binary and assembly (recommended)
-#   python3 -m pear --input-binary BINARY --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --gen-asm --gen-binary --target-func ADDR
-# - Instrument GTIRB IR and produce instrumented GTIRB IR
-#   python3 -m pear --input-IR IR_FILE --output-dir OUTPUT_DIR --ir-cache CACHE_DIR --target-func ADDR'''
+binary 64-bit MSVS compiler tools must be installed, and 32-bit tools for a
+32-bit binary.
+
+ example usage:
+ - Instrument binary and produce new binary
+   $ pear --ir-cache IR_CACHE_DIR --input-binary BINARY --output-dir OUT --gen-binary WinAFL --target-func ADDRESS
+
+ - See help for a rewriter
+   $ pear WinAFL -h
+   $ pear Identity -h
+
+ - Test if GTIRB can rewrite a binary
+   $ pear --ir-cache IR_CACHE_DIR --input-binary BINARY --output-dir OUT --gen-binary Identity
+'''
 
 def parse_args() -> argparse.Namespace:
     """
@@ -88,15 +88,17 @@ Hint: running a docker container? Check volume mount location')
     )
     required.add_argument(
         '--output-dir', required=True, type=path_exists,
-        help="Directory to store temporary files and instrumentation results."
+        help="Empty directory to store temporary files and instrumentation results."
+    )
+    optional.add_argument(
+        '--ignore-nonempty', action='store_true', required=False,
+        help="Ignore nonempty output directory."
     )
     optional.add_argument(
         '--gen-binary', action='store_true', required=False,
         help=textwrap.dedent('''\
-            Build instrumented binary. Requires gtirb-pprinter to be installed,
-            as well as either GCC for Linux binaries or Microsoft assembler for
-            Windows binaries. See '--build-server' option for doing build on
-            seperate machine.
+            Build instrumented binary. Requires gtirb-pprinter and build tools
+            to be installed.
          ''')
     )
     optional.add_argument(
@@ -118,14 +120,18 @@ Hint: running a docker container? Check volume mount location')
     rewriter_parsers = parser.add_subparsers(dest='rewriter',
                                              help='Available rewriters',
                                              required=True)
-
     for r in REWRITERS:
-        r_name, r_desc = r.get_info()
-        r_parser = rewriter_parsers.add_parser(r_name, help=r_desc)
-        r.build_parser(r_parser)
+        r.build_parser(rewriter_parsers)
 
     args = parser.parse_args()
+
+    # Get chosen rewriter class
     args.rewriter = REWRITER_MAP[args.rewriter]
+
+    # Check output dir empty
+    if not args.ignore_nonempty:
+        if len(os.listdir(args.output_dir)) != 0:
+            parser.error(f'Output dir "{args.output_dir}" not empty. To continue anyway, use --ignore-nonempty. This could break the rewriter.')
 
     return args
 
