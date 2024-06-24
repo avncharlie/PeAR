@@ -158,6 +158,7 @@ class WindowsUtils(ArchUtils):
         assert gen_assembly or gen_binary, \
             "At least one of gen_assembly or gen_binary must be true"
 
+        is_64bit = ir.modules[0].isa == gtirb.Module.ISA.X64
         basename = os.path.basename(output)
 
         # Generate assembly (required for binary generation as well)
@@ -203,40 +204,32 @@ class WindowsUtils(ArchUtils):
         with open(asm_fname, 'w') as f:
             f.write(asm)
 
-        if gen_assembly:
+        if not gen_binary:
             return
-
-        # Check MSVC build tools accessible and right architecture
-        is_64bit = ir.modules[0] == gtirb.Module.ISA.X64
-        assert check_executables_exist(['cl']), \
-            "MSVC build tools not found, are you running in a developer command prompt?"
-        cl_out, _ = run_cmd(["cl"], print=False)
-        if is_64bit:
-            assert b"for x64" in cl_out, \
-                "64-bit MSVC build tools must be used to generate 64-bit instrumented binary"
-        else:
-            assert b"for x86" in cl_out, \
-                "32-bit MSVC build tools must be used to generate 32-bit instrumented binary"
-        log.info(f"{'64-bit' if is_64bit else '32-bit'} MSVC build tools found.")
 
         # Generate lib files from def files
         for dll in def_files:
             def_file = def_files[dll]
             lib_file = os.path.join(working_dir, f'{dll}.lib')
+            machine = r'/MACHINE:X64' if is_64bit else r'/MACHINE:X86'
             cmd = ['lib', r'/nologo', fr'/def:{def_file}', fr'/out:{lib_file}',
-                r'/MACHINE:X86']
+                   machine]
             run_cmd(cmd)
 
         # Generate object from instrumented assembly
         obj_name = f'{basename}.obj'
         obj_path = os.path.join(working_dir, obj_name)
-        cmd = ["ml", r'/nologo', r'/c', fr'/Fo{obj_path}', f'{asm_fname}']
+        ml = "ml64" if is_64bit else "ml"
+        cmd = [ml, r'/nologo', r'/c', fr'/Fo{obj_path}', f'{asm_fname}']
         run_cmd(cmd)
 
         # Generate executable, linking in files if needed
         binary_name = f'{basename}.exe'
         binary_path = os.path.join(working_dir, f'{basename}.exe')
-        cmd = ["cl", r'/nologo', f'{obj_name}', fr'/Fe{binary_name}', r'/link'] + obj_link + [r'/ENTRY:_EntryPoint', r'/SUBSYSTEM:console']
+        if obj_link == None:
+            obj_link = []
+        entrypoint = r'/ENTRY:__EntryPoint' if is_64bit else r'/ENTRY:_EntryPoint'
+        cmd = ["cl", r'/nologo', f'{obj_name}', fr'/Fe{binary_name}', r'/link'] + obj_link + [entrypoint, r'/SUBSYSTEM:console']
         run_cmd(cmd, working_dir=working_dir)
 
         log.info(f'Generated binary saved to: {binary_path}')
@@ -297,9 +290,14 @@ class WindowsX86Utils(WindowsUtils):
             push    esi
             push    edi
 
+            # sub stack right before call. may not be needed.
+            sub esp, 0x40
+
             {pre_call}
             call    {func}
             {post_call}
+
+            add esp, 0x40
 
             pop     edi
             pop     esi
@@ -309,5 +307,129 @@ class WindowsX86Utils(WindowsUtils):
             pop     ecx
             pop     eax
             popfd
+            add     esp, {hex(save_stack)}
+        '''
+
+class WindowsX64Utils(WindowsUtils):
+    @staticmethod
+    def backup_registers(label: str) -> str:
+        return f'''
+            mov    QWORD PTR [rip+{label}],        rax
+            mov    QWORD PTR [rip+{label} + 0x8],  rbx
+            mov    QWORD PTR [rip+{label} + 0x10], rcx
+            mov    QWORD PTR [rip+{label} + 0x18], rdx
+            mov    QWORD PTR [rip+{label} + 0x20], rdi
+            mov    QWORD PTR [rip+{label} + 0x28], rsi
+            mov    QWORD PTR [rip+{label} + 0x30], r8
+            mov    QWORD PTR [rip+{label} + 0x38], r9
+            mov    QWORD PTR [rip+{label} + 0x40], r10
+            mov    QWORD PTR [rip+{label} + 0x48], r11
+            mov    QWORD PTR [rip+{label} + 0x50], r12
+            mov    QWORD PTR [rip+{label} + 0x58], r13
+            mov    QWORD PTR [rip+{label} + 0x60], r14
+            mov    QWORD PTR [rip+{label} + 0x68], r15
+            movq   QWORD PTR [rip+{label} + 0x70], xmm0
+            movq   QWORD PTR [rip+{label} + 0x80], xmm1
+            movq   QWORD PTR [rip+{label} + 0x90], xmm2
+            movq   QWORD PTR [rip+{label} + 0xa0], xmm3
+            movq   QWORD PTR [rip+{label} + 0xb0], xmm4
+            movq   QWORD PTR [rip+{label} + 0xc0], xmm5
+            movq   QWORD PTR [rip+{label} + 0xd0], xmm6
+            movq   QWORD PTR [rip+{label} + 0xe0], xmm7
+            movq   QWORD PTR [rip+{label} + 0xf0], xmm8
+            movq   QWORD PTR [rip+{label} + 0x100],xmm9
+            movq   QWORD PTR [rip+{label} + 0x110],xmm10
+            movq   QWORD PTR [rip+{label} + 0x120],xmm11
+            movq   QWORD PTR [rip+{label} + 0x130],xmm12
+            movq   QWORD PTR [rip+{label} + 0x140],xmm13
+            movq   QWORD PTR [rip+{label} + 0x150],xmm14
+            movq   QWORD PTR [rip+{label} + 0x160],xmm15
+        '''
+
+    @staticmethod
+    def restore_registers(label: str) -> str:
+        return f'''
+            mov    rax,  QWORD PTR [rip+{label}]
+            mov    rbx,  QWORD PTR [rip+{label} + 0x8]
+            mov    rcx,  QWORD PTR [rip+{label} + 0x10]
+            mov    rdx,  QWORD PTR [rip+{label} + 0x18]
+            mov    rdi,  QWORD PTR [rip+{label} + 0x20]
+            mov    rsi,  QWORD PTR [rip+{label} + 0x28]
+            mov    r8,   QWORD PTR [rip+{label} + 0x30]
+            mov    r9,   QWORD PTR [rip+{label} + 0x38]
+            mov    r10,  QWORD PTR [rip+{label} + 0x40]
+            mov    r11,  QWORD PTR [rip+{label} + 0x48]
+            mov    r12,  QWORD PTR [rip+{label} + 0x50]
+            mov    r13,  QWORD PTR [rip+{label} + 0x58]
+            mov    r14,  QWORD PTR [rip+{label} + 0x60]
+            mov    r15,  QWORD PTR [rip+{label} + 0x68]
+            movq   xmm0, QWORD PTR [rip+{label} + 0x70]
+            movq   xmm1, QWORD PTR [rip+{label} + 0x80]
+            movq   xmm2, QWORD PTR [rip+{label} + 0x90]
+            movq   xmm3, QWORD PTR [rip+{label} + 0xa0]
+            movq   xmm4, QWORD PTR [rip+{label} + 0xb0]
+            movq   xmm5, QWORD PTR [rip+{label} + 0xc0]
+            movq   xmm6, QWORD PTR [rip+{label} + 0xd0]
+            movq   xmm7, QWORD PTR [rip+{label} + 0xe0]
+            movq   xmm8, QWORD PTR [rip+{label} + 0xf0]
+            movq   xmm9, QWORD PTR [rip+{label} + 0x100]
+            movq   xmm10,QWORD PTR [rip+{label} + 0x110]
+            movq   xmm11,QWORD PTR [rip+{label} + 0x120]
+            movq   xmm12,QWORD PTR [rip+{label} + 0x130]
+            movq   xmm13,QWORD PTR [rip+{label} + 0x140]
+            movq   xmm14,QWORD PTR [rip+{label} + 0x150]
+            movq   xmm15,QWORD PTR [rip+{label} + 0x160]
+        '''
+
+    @staticmethod
+    def call_function(func: str,
+                      save_stack: Optional[int]=0,
+                      pre_call: Optional[str]='',
+                      post_call: Optional[str]='') -> str:
+
+        return f'''
+            sub     esp, {hex(save_stack)}
+            pushfq
+            push    rax
+            push    rcx
+            push    rdx
+            push    rsi
+            push    rdi
+            push    r8
+            push    r9
+            push    r10
+            push    r11
+            push    rax
+
+            # stack alignment
+            mov     rdi, rsp
+            lea     rsp, [rsp - 0x80]
+            and     rsp, 0xfffffffffffffff0
+            push    rdi
+            push    rdi
+
+            # sub stack right before call. may not be needed.
+            sub     rsp, 0x100
+
+            {pre_call}
+            call {func}
+            {post_call}
+
+            add rsp, 0x100
+
+            pop     rdi
+            mov     rsp, rdi
+
+            pop     rax
+            pop     r11
+            pop     r10
+            pop     r9
+            pop     r8
+            pop     rdi
+            pop     rsi
+            pop     rdx
+            pop     rcx
+            pop     rax
+            popfq
             add     esp, {hex(save_stack)}
         '''

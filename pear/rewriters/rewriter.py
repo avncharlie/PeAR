@@ -12,7 +12,7 @@ class Rewriter:
     Base class that represents rewriters.
     The 'transform' method adds instrumentation to an IR, and the 'generate'
     method generates a binary or assembly from the instrumented IR.
-    The 'get_info' and 'build_parser' methods setup argument parsing for the IR.
+    The 'name' and 'build_parser' methods setup argument parsing for the IR.
     """
     def __init__(self, ir: gtirb.IR, args: argparse.Namespace):
         """
@@ -56,18 +56,14 @@ class Rewriter:
                            gen_binary=gen_binary)
 
     @staticmethod
-    def get_info() -> tuple[str, str]:
+    def build_parser(parser: argparse._SubParsersAction):
         """
-        Return name and description of rewriter.
-        Used when listing rewriters on command line.
-
-        :returns: A tuple containing: (rewriter name, brief summary).
+        Set up arparse parser for rewriter-specific arguments.
+        Method should add subparser parser to given main parser.
         """
         raise NotImplementedError
 
     @staticmethod
-    def build_parser(parser: argparse.ArgumentParser):
-        """
-        Set up arparse parser for rewriter-specific arguments.
-        """
+    def name():
+        """Returns name of rewriter"""
         raise NotImplementedError

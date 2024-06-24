@@ -32,7 +32,7 @@
 #include <tchar.h>
 
 #if defined(_M_X64) || defined(__amd64__)
-#error Static instrumentation is only available for 32 bit binaries
+    #define IS_64_BIT 1
 #endif
 
 //

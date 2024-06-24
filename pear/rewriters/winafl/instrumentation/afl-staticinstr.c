@@ -20,13 +20,24 @@ extern "C" {
 #endif
 
 #define MAP_SIZE 65536
-#define STATIC_COV_SECTION_NAME ".syzyafl"
+#define STATIC_COV_SECTION_NAME "SYZYAFL"
 #define STATIC_COV_SECTION_NAME_LEN 8
 #define AFL_STATIC_CONFIG_ENV TEXT("AFL_STATIC_CONFIG")
 #define AFL_VARIABLE_BEHAVIOR_TRACES_BASE_DIR TEXT("C:\\traces")
 #define AFL_VARIABLE_BEHAVIOR_ITERATIONS 10
 #define MAX_STRING_SIZE 64
 
+#if defined(IS_64_BIT)
+#pragma pack(push, 1)
+typedef struct {
+    UINT64 __tls_index;
+    UINT64 __tls_slot_offset;
+    PUINT64 __afl_prev_loc;
+    PUCHAR __afl_area_ptr;
+    CHAR __afl_area[MAP_SIZE];
+} STATIC_COVERAGE_DATA, *PSTATIC_COVERAGE_DATA;
+#pragma pack(pop)
+#else
 #pragma pack(push, 1)
 typedef struct {
     UINT32 __tls_index;
@@ -36,6 +47,7 @@ typedef struct {
     CHAR __afl_area[MAP_SIZE];
 } STATIC_COVERAGE_DATA, *PSTATIC_COVERAGE_DATA;
 #pragma pack(pop)
+#endif
 
 //
 // The handle to the pipe used to talk with afl-fuzz.exe
@@ -238,8 +250,11 @@ Return Value:
     // in the address space.
     // If not, we turn on the no instrumentation switch.
     //
-
+#if defined(IS_64_BIT)
+    Status = EnumProcessModulesEx(GetCurrentProcess(), Modules, sizeof(Modules), &SizeNeeded, LIST_MODULES_64BIT);
+#else
     Status = EnumProcessModulesEx(GetCurrentProcess(), Modules, sizeof(Modules), &SizeNeeded, LIST_MODULES_32BIT);
+#endif
 
     if(Status == FALSE) {
         _tprintf(TEXT("[-] EnumProcessModulesEx failed - too many modules loaded?.\n"));
@@ -248,11 +263,23 @@ Return Value:
 
     for(i = 0; i < SizeNeeded / sizeof(Modules[0]); ++i) {
         PVOID Base = (PVOID)Modules[i];
+        TCHAR ModuleName[MAX_PATH];
+
+        // if (GetModuleFileNameEx(GetCurrentProcess(), Modules[i], ModuleName, sizeof(ModuleName) / sizeof(TCHAR))) {
+        //     _tprintf(TEXT("[DEBUG] Module name: %s\n"), ModuleName);
+        // }
+
         PIMAGE_NT_HEADERS NtHeaders = (PIMAGE_NT_HEADERS)((PUCHAR)Base + ((PIMAGE_DOS_HEADER)Base)->e_lfanew);
         PIMAGE_SECTION_HEADER Sections = (PIMAGE_SECTION_HEADER)(NtHeaders + 1);
         USHORT j = 0;
 
         for(j = 0; j < NtHeaders->FileHeader.NumberOfSections; ++j) {
+
+            // _tprintf(
+            //     TEXT("[DEBUG] section name: (%s)\n"),
+            //     Sections[j].Name
+            // );
+
             if(memcmp(Sections[j].Name, STATIC_COV_SECTION_NAME, STATIC_COV_SECTION_NAME_LEN) != 0) {
                 continue;
             }
@@ -265,14 +292,19 @@ Return Value:
             if(g_ninstrumented_modules == ARRAYSIZE(g_static_coverage_data)) {
                 _tprintf(
                     TEXT("[!] You have exhausted the number of instrumented modules (%d).\n"),
-                    g_ninstrumented_modules
+                    (int)g_ninstrumented_modules
                 );
                 break;
             }
 
             GetModuleBaseName(GetCurrentProcess(), Modules[i], InstrumentedModuleName, MAX_STRING_SIZE);
             g_static_coverage_data[g_ninstrumented_modules] = (STATIC_COVERAGE_DATA*)(
-                Sections[j].VirtualAddress + (DWORD)Base
+                Sections[j].VirtualAddress + 
+#if defined(IS_64_BIT)
+                (UINT64)Base
+#else
+                (DWORD)Base
+#endif
             );
 
             _tprintf(
@@ -315,7 +347,7 @@ Return Value:
     memset(ShmName, 0, MAX_STRING_SIZE * sizeof(ShmName[0]));
 
     _tprintf(TEXT("[*] Setting up the environment (%s)..\n"), StaticConfig);
-    if(_stscanf_s(StaticConfig, TEXT("%[a-zA-Z0-9]:%u"), FuzzerId, _countof(FuzzerId), &g_niterations) != 2) {
+    if(_stscanf_s(StaticConfig, TEXT("%[a-zA-Z0-9]:%u"), FuzzerId, (unsigned int)_countof(FuzzerId), (unsigned int*)&g_niterations) != 2) {
         _tprintf(
             TEXT("[-] The ") AFL_STATIC_CONFIG_ENV TEXT(" environment variable isn't properly formated.\n")
         );
@@ -387,7 +419,7 @@ Return Value:
         g_static_coverage_data[i]->__afl_area_ptr = (PUCHAR)AreaPtr;
     }
 
-    _tprintf(TEXT("[+] Fixed-up the %d instrumented modules.\n"), g_ninstrumented_modules);
+    _tprintf(TEXT("[+] Fixed-up the %d instrumented modules.\n"), (int)g_ninstrumented_modules);
 
     clean:
 
@@ -729,18 +761,19 @@ Return Value:
         for(i = 0; i < g_ninstrumented_modules; ++i) {
             PUINT32 PerThreadPrevLoc;
             STATIC_COVERAGE_DATA *CurrentCoverageData = g_static_coverage_data[i];
-            if(CurrentCoverageData->__tls_slot_offset != 0) {
 
-                //
-                // TLS version if we are fuzzing a multithread instrumented binary.
-                //
+            // PeAR only supports global coverage data
+            // if(CurrentCoverageData->__tls_slot_offset != 0) {
+            //     //
+            //     // TLS version if we are fuzzing a multithread instrumented binary.
+            //     //
+            //     PUINT32 Base = (PUINT32)(__readfsdword(0x2C) + (4 * CurrentCoverageData->__tls_index));
+            //     PerThreadPrevLoc = (PUINT32)(*Base + CurrentCoverageData->__tls_slot_offset);
+            // } else {
+            //     PerThreadPrevLoc = (PUINT32)(&CurrentCoverageData->__afl_prev_loc);
+            // }
 
-                PUINT32 Base = (PUINT32)(__readfsdword(0x2C) + (4 * CurrentCoverageData->__tls_index));
-                PerThreadPrevLoc = (PUINT32)(*Base + CurrentCoverageData->__tls_slot_offset);
-            } else {
-                PerThreadPrevLoc = (PUINT32)(&CurrentCoverageData->__afl_prev_loc);
-            }
-
+            PerThreadPrevLoc = (PUINT32)(&CurrentCoverageData->__afl_prev_loc);
             *PerThreadPrevLoc = 0;
         }
 
