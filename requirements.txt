@@ -1,0 +1,2 @@
+gtirb-rewriting>=0.1.2
+pytest
