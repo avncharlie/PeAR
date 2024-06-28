@@ -7,5 +7,5 @@ python --version 2>nul | find "Python 3" >nul
 if %errorlevel% equ 0 (
     python -m pear %*
 ) else (
-    echo "Please install Python 3 (highest supported version is 3.10), then install dependencies with: python -m pip install -r .\pear\requirements.txt"
+    echo "Please install Python 3 (highest supported version is 3.10), then install dependencies with: python -m pip install -r .\requirements.txt"
 )
