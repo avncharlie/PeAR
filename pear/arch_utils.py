@@ -133,6 +133,59 @@ class WindowsUtils(ArchUtils):
 
         return def_file_mappings
 
+    def asm_fix_lib_names(asm: str, def_files: dict[str, str]) -> str:
+        '''
+        Modify GTIRB generated assembly to link to our lib files.
+        The default name gtirb-pprinter for the lib files is the dll name + lib,
+        which is encoded in the generated assembly.
+        e.g. for Kernel32.dll the gtirb-generated generated lib file would be
+        KERNEL32.LIB.
+        This causes conflicts with the actual Kernel32.lib which we need to use
+        to link most static libraries. So we name our lib files something
+        different (e.g. we rename Kernel32.dll to Kernel32.dll.lib) to avoid
+        this.  Below, we modify the gtirb-generated assembly to use our naming
+        scheme.
+
+        :param asm: assembly to fix
+        :param def_files: mapping of dll names to their generated def files
+        :returns: fixed assembly
+        '''
+        for dll in def_files:
+            #  generate gtirb-pprinter's name for a lib
+            gtirb_lib_name = dll
+            if dll.endswith('.dll'):
+                gtirb_lib_name = dll[:-4]+'.lib'
+            #  generate our own name
+            new_lib_name = f'{dll}.lib'
+            new_includelib_line= f'INCLUDELIB {new_lib_name}'
+            old_includelib_line = f'INCLUDELIB {gtirb_lib_name}'
+            #  replace reference in asm with our new name.
+            asm = asm.replace(old_includelib_line, new_includelib_line)
+        # Remove dummy library include. Symbols 'used' by dummy library will be
+        # fullfilled by static library we later link. Dummy library included as
+        # gtirb doesn't allow referencing symbols unless we define the dll they
+        # come from, which it attempts to import while binary pretty printing.
+        dummy_lib_include = f'INCLUDELIB {DUMMY_LIB_NAME}\n'
+        asm = asm.replace(dummy_lib_include, '')
+        return asm
+
+    def asm_fix_func_name_collisions(asm: str, names: list[str]) -> str:
+        '''
+        Ignore keywords that conflict with names of functions.
+        Unfortunately the only way I see to do this is disabling the keyword.
+        So programs that have name collisions and also use the keyword won't
+        assemble.
+        
+        :param asm: assembly to fix
+        :param names: names of conflicting functions
+        :returns: fixed assembly
+        '''
+        ignore_keywords = ''
+        for name in names:
+            if f"call {name}" in asm or f"EXTERN {name}:PROC" in asm :
+                ignore_keywords += f"option nokeyword: <{name}>\n"
+        return ignore_keywords + asm
+
     @staticmethod
     def generate(ir_file: str, output: str, working_dir: str, ir: gtirb.IR,
                     gen_assembly: Optional[bool]=False,
@@ -168,38 +221,22 @@ class WindowsUtils(ArchUtils):
         run_cmd(cmd)
         log.info(f'Generated assembly saved to: {asm_fname}')
 
-        # Generate def files to use for linking dlls in final binary
-        def_files = WindowsUtils.generate_def_file(ir, working_dir, ignore_dlls=[DUMMY_LIB_NAME])
-
-        # Modify ASM to link to our lib files.
-        # The default name gtirb-pprinter for the lib files is the dll name + lib,
-        # which is encoded in the generated assembly.
-        # e.g. for Kernel32.dll the gtirb-generated generated lib file would be
-        # KERNEL32.LIB.
-        # This causes conflicts with the actual Kernel32.lib which we need to use
-        # to link most static libraries. So we name our lib files something
-        # different (e.g. we rename Kernel32.dll to Kernel32.dll.lib) to avoid this. 
-        # Below, we modify the gtirb-generated assembly to use our naming scheme.
+        # Apply modifications to assembly
         asm = None
         with open(asm_fname, 'r') as f:
             asm = f.read()
-        for dll in def_files:
-            #  generate gtirb-pprinter's name for a lib
-            gtirb_lib_name = dll
-            if dll.endswith('.dll'):
-                gtirb_lib_name = dll[:-4]+'.lib'
-            #  generate our own name
-            new_lib_name = f'{dll}.lib'
-            new_includelib_line= f'INCLUDELIB {new_lib_name}'
-            old_includelib_line = f'INCLUDELIB {gtirb_lib_name}'
-            #  replace reference in asm with our new name.
-            asm = asm.replace(old_includelib_line, new_includelib_line)
-        # Remove dummy library include. Symbols 'used' by dummy library will be
-        # fullfilled by static library we later link. Dummy library included as
-        # gtirb doesn't allow referencing symbols unless we define the dll they
-        # come from, which it attempts to import while binary pretty printing.
-        dummy_lib_include = f'INCLUDELIB {DUMMY_LIB_NAME}\n'
-        asm = asm.replace(dummy_lib_include, '')
+        assert asm != None
+
+        # Generate def files to use for linking dlls in final binary and link 
+        # into assembly
+        def_files = WindowsUtils.generate_def_file(ir, working_dir,
+                                                   ignore_dlls=[DUMMY_LIB_NAME])
+        asm = WindowsUtils.asm_fix_lib_names(asm, def_files)
+
+        # Some functions share the name of assembly keywords. Fix these
+        # collisions in the generated assembly
+        asm = WindowsUtils.asm_fix_func_name_collisions(asm, ['fabs'])
+
         # Write back modified ASM
         with open(asm_fname, 'w') as f:
             f.write(asm)

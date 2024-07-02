@@ -1,13 +1,17 @@
 import os
 import sys
 import time
+import json
 import logging
 import pathlib
 import textwrap
 import argparse
 
+from collections import OrderedDict
+
 import gtirb
 
+from . import utils
 from .ddisasm import ddisasm
 from . import REWRITERS, REWRITER_MAP
 from .rewriters.rewriter import Rewriter
@@ -154,14 +158,15 @@ if __name__ == "__main__":
     if basename.endswith('.gtirb'):
         basename = basename[:-len('.gtirb')]
 
-    # load IR
+    # load IR and generate mappings
     start_t = time.time()
     ir = gtirb.IR.load_protobuf(args.input_ir)
+    mappings = utils.get_address_to_byteblock_mappings(ir)
     diff = round(time.time()-start_t, 3)
     log.info(f'IR loaded in {diff} seconds')
 
     # Run chosen rewriter
-    rewriter: Rewriter = args.rewriter(ir, args)
+    rewriter: Rewriter = args.rewriter(ir, args, mappings)
     instrumented_ir = rewriter.rewrite()
 
     # Save instrumented IR

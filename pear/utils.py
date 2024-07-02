@@ -69,18 +69,30 @@ def check_executables_exist(to_check: list[str]) -> bool:
             found = False
     return found
 
-def get_address_to_codeblock_mappings(ir: gtirb.IR) -> OrderedDict[int, uuid.UUID]:
+def get_address_to_byteblock_mappings(ir: gtirb.IR) -> OrderedDict[int, uuid.UUID]:
     """
-    Generate mapping between addresses and codeblocks. Needs to to be generated
-    before any modifications have been made to the IR.
+    Generate mapping between addresses and GTIRB ByteBlocks.
 
     :param module: GTIRB module to build mapping for
-    :returns: dictionary of addresses to codeblock UUIDs
+    :returns: dictionary of addresses to ByteBlock UUIDs
+    """
+    f = OrderedDict()
+    for block in sorted(ir.byte_blocks, key=lambda e: e.address):
+        f[block.address] = block.uuid
+    return f
+
+def get_codeblock_to_address_mappings(ir: gtirb.IR) -> OrderedDict[uuid.UUID, int]:
+    """
+    Generate mapping between codeblocks and address.
+
+    :param module: GTIRB module to build mapping for
+    :returns: dictionary of codeblock UUIDs to addresses
     """
     f = OrderedDict()
     for block in sorted(ir.code_blocks, key=lambda e: e.address):
-        f[block.address] = block.uuid
+        f[block.uuid] = block.address
     return f
+
 
 def insert_patch_at_address(patch_address: int, patch: Patch,
                             mappings: OrderedDict[int, uuid.UUID],
