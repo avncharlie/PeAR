@@ -8,26 +8,35 @@ from typing import Optional
 
 import gtirb
 
+import gtirb
+from gtirb_rewriting import (
+    Pass,
+    Patch,
+    X86Syntax,
+    Constraints,
+    PassManager,
+    BlockPosition,
+    SingleBlockScope
+)
+import gtirb_rewriting._auxdata as _auxdata
+from gtirb_capstone.instructions import GtirbInstructionDecoder
+
+
 from .rewriter import Rewriter
 from ..utils import run_cmd
 from ..arch_utils import WindowsUtils
 
 log = logging.getLogger(__name__)
 
-class IdentityRewriter(Rewriter):
+class DebugRewriter(Rewriter):
     """
     Rewriter that doesn't apply any tranformation, just lifts the binary to IR
     before attempting to generate it.
     """
     @staticmethod
     def build_parser(parser: argparse._SubParsersAction):
-        parser = parser.add_parser(IdentityRewriter.name(),
-                                   help='Cycle binary through reassembly and disassembly')
-        parser.description = """\
-Lift binary to GTIRB IR then attempt to generate it.
-If a binary can't go through this rewriter without breaking, GTIRB isn't
-able to reassemble or disassemble it correctly and instrumentation will not
-be possible."""
+        parser = parser.add_parser(DebugRewriter.name(),
+                                   help='dbg')
 
         parser.add_argument(
             '--link', required=False, nargs='+',
@@ -37,7 +46,7 @@ be possible."""
 
     @staticmethod
     def name():
-        return 'Identity'
+        return 'Debug'
 
     def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
                  mappings: OrderedDict[int, uuid.UUID]):
@@ -56,6 +65,14 @@ be possible."""
         self.link = link
 
     def rewrite(self) -> gtirb.IR:
+        passes = [
+            BreakSwitchPass(),
+        ]
+        for p in passes:
+            manager = PassManager()
+            manager.add(p)
+            manager.run(self.ir)
+
         return self.ir
 
     def generate(self,
@@ -67,3 +84,18 @@ be possible."""
                                     gen_assembly=gen_assembly,
                                     gen_binary=gen_binary,
                                     obj_link=self.link)
+
+class BreakSwitchPass(Pass):
+    def begin_module(self, module, functions, rewriting_ctx):
+        for x in module.code_blocks:
+            if x.address == 0x14000721c:
+                rewriting_ctx.register_insert(
+                    SingleBlockScope(x, BlockPosition.ENTRY),
+                    Patch.from_function(lambda _:f'''
+                    nop
+                    nop
+                    nop
+                    nop
+                    ''', Constraints(x86_syntax=X86Syntax.INTEL))
+                )
+

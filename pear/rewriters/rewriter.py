@@ -1,5 +1,8 @@
+import uuid
 import logging
 import argparse
+
+from collections import OrderedDict
 from typing import Optional
 
 import gtirb
@@ -14,13 +17,15 @@ class Rewriter:
     method generates a binary or assembly from the instrumented IR.
     The 'name' and 'build_parser' methods setup argument parsing for the IR.
     """
-    def __init__(self, ir: gtirb.IR, args: argparse.Namespace):
+    def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
+                 mappings: OrderedDict[int, uuid.UUID]):
         """
         Create a rewriter.
 
         :param ir: ir to instrument.
         :param args: Parsed arguments for rewriter. Parser built using
             build_parser class method.
+        :param mappings: Codeblocks to address mappings in original IR
         """
         raise NotImplementedError
     

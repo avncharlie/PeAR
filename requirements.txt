@@ -1,2 +1,6 @@
-gtirb-rewriting>=0.1.2
+# gtirb-rewriting>=0.1.2
+
+# temporary fix to workaround https://github.com/GrammaTech/gtirb-rewriting/issues/15
+# when it is fixed should switch back to gtirb-rewriting package on pip
+-e git+https://github.com/avncharlie/gtirb-rewriting.git@jump_table_workaround#egg=gtirb-rewriting
 pytest

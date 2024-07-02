@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 import random
 import shutil
@@ -64,6 +65,12 @@ class WinAFLRewriter(Rewriter):
         )
 
         optional.add_argument(
+            '--ignore-functions', required=False, nargs='+',
+            help="Addresses of functions to not instrument",
+            metavar=("ADDR1", "ADDR2")
+        )
+
+        optional.add_argument(
             '--extra-link-libs', required=False, nargs='+',
             help="Extra libraries to link to final executable",
             metavar=("LIB1", "LIB2")
@@ -73,13 +80,14 @@ class WinAFLRewriter(Rewriter):
     def name():
         return 'WinAFL'
 
-    def __init__(self, ir: gtirb.IR, args: argparse.Namespace):
+    def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
+                 mappings: OrderedDict[int, uuid.UUID]):
         self.ir = ir
         self.target_func: int = args.target_func
-        self.mappings: OrderedDict[int, uuid.UUID] = utils.get_address_to_codeblock_mappings(ir)
-        self.extra_link: list[str] = args.extra_link_libs
+        self.mappings = mappings
 
         # convert relative library paths to absolute paths
+        self.extra_link: list[str] | None = args.extra_link_libs
         link = []
         if self.extra_link != None:
             for l in self.extra_link:
@@ -90,6 +98,16 @@ class WinAFLRewriter(Rewriter):
                     link.append(l)
         self.extra_link = link
         self.is_64bit = ir.modules[0].isa == gtirb.Module.ISA.X64
+
+        # convert ignorelist to hex addresses
+        if args.ignore_functions == None:
+            args.ignore_functions = []
+        self.ignore_funcs: list[int] = []
+        for func in args.ignore_functions:
+            try:
+                self.ignore_funcs.append(int(func, 16))
+            except ValueError:
+                assert False, (f'Can\'t parse "{func}" as address, please provide hex address')
 
         # check compiler right version
         assert check_executables_exist(['cl']), \
@@ -108,7 +126,8 @@ class WinAFLRewriter(Rewriter):
             # Data must be added in a seperate pass before it can be referenced
             # in other passes.
             AddWinAFLDataPass(self.is_64bit), 
-            AddWinAFLPass(self.mappings, self.target_func, self.is_64bit)
+            AddWinAFLPass(self.mappings, self.target_func, self.is_64bit,
+                          self.ignore_funcs)
         ]
         # gtirb-rewriting's pass manager is bugged and can only handle running
         # one pass at a time.
@@ -116,6 +135,7 @@ class WinAFLRewriter(Rewriter):
             manager = PassManager()
             manager.add(p)
             manager.run(self.ir)
+
         return self.ir
 
     def generate(self,
@@ -248,7 +268,7 @@ class WinAFL64TrampolinePatch(Patch):
 
 class AddWinAFLPass(Pass):
     def __init__(self, mappings: OrderedDict[int, uuid.UUID], target_func: int,
-                 is_64bit: bool):
+                 is_64bit: bool, ignore_funcs: list[int]):
         """
         Insert AFL instrumentation.
         Adds block tracing code to all functions, and persistent fuzzing loop to
@@ -262,6 +282,7 @@ class AddWinAFLPass(Pass):
         self.mappings = mappings
         self.target_func = target_func
         self.is_64bit = is_64bit
+        self.ignore_funcs = ignore_funcs
 
     def persistent_patch_x32(self):
         backup_regs = WindowsX86Utils.backup_registers('p_mode_reg_backup')
@@ -387,11 +408,22 @@ class AddWinAFLPass(Pass):
             WinAFLTrampolinePatch = WinAFL32TrampolinePatch
 
         instr_count = 0
+        ignore = {self.mappings[f]: f for f in self.ignore_funcs} # uuid: address
         for func in functions:
+            skip = False
 
             # don't instrument start function as that we won't have set up
             # __afl_area_ptr by then
             if module.entry_point in func.get_all_blocks():
+                skip = True
+
+            # ignore user-specified functions
+            for b in func.get_entry_blocks():
+                if b.uuid in ignore:
+                    log.info(f"Skipping function {hex(ignore[b.uuid])}...")
+                    skip = True
+
+            if skip:
                 continue
 
             blocks = utils.get_basic_blocks(func)
