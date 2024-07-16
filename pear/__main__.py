@@ -6,6 +6,7 @@ import logging
 import pathlib
 import textwrap
 import argparse
+import gtirb_rewriting._auxdata as _auxdata
 
 from collections import OrderedDict
 
@@ -139,6 +140,17 @@ Hint: running a docker container? Check volume mount location')
 
     return args
 
+def fixup_data_align(ir: gtirb.IR):
+    '''
+    Fix issue breaking data alignment in jump tables by manually setting all
+    DataBlock's alignment to four.
+    More info here: https://github.com/GrammaTech/gtirb-rewriting/issues/15
+    '''
+    module = ir.modules[0]
+    alignment = _auxdata.alignment.get_or_insert(module)
+    for db in module.data_blocks:
+        alignment[db] = 1
+
 if __name__ == "__main__":
     args = parse_args()
 
@@ -164,6 +176,9 @@ if __name__ == "__main__":
     mappings = utils.get_address_to_byteblock_mappings(ir)
     diff = round(time.time()-start_t, 3)
     log.info(f'IR loaded in {diff} seconds')
+
+    # fix gtirb issue that breaks data alignment
+    fixup_data_align(ir)
 
     # Run chosen rewriter
     rewriter: Rewriter = args.rewriter(ir, args, mappings)
