@@ -127,7 +127,13 @@ class WindowsUtils(ArchUtils):
             with open(out_fname, 'w') as f:
                 f.write(f'LIBRARY "{lib}"\n\nEXPORTS\n')
                 for func in exports[lib]:
-                    f.write(f'    {func}\n')
+                    if func.split('@')[0] == lib[:-4]:
+                        # Import by ordinal
+                        ordinal = func.split('@')[1]
+                        f.write(f'    {func} @ {ordinal} NONAME\n')
+                    else:
+                        # Import by name
+                        f.write(f'    {func}\n')
 
             log.info(f"Generated DEF file for {lib} at: {out_fname}")
 
