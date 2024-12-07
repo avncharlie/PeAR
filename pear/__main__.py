@@ -120,6 +120,13 @@ Hint: running a docker container? Check volume mount location')
             the same binary.
         ''')
     )
+    optional.add_argument(
+        '--regenerate', type=path_exists, required=False,
+        help=textwrap.dedent('''\
+            Given assembly (output from PeAR), attempt to generate an
+            instrumented binary from it.
+         ''')
+    )
 
     # Add rewriter subcommands
     rewriter_parsers = parser.add_subparsers(dest='rewriter',
@@ -178,21 +185,15 @@ if __name__ == "__main__":
     log.info(f'IR loaded in {diff} seconds')
 
     # fix gtirb issue that breaks data alignment
-    fixup_data_align(ir)
+    # fixup_data_align(ir)
 
     # Run chosen rewriter
     rewriter: Rewriter = args.rewriter(ir, args, mappings)
     instrumented_ir = rewriter.rewrite()
 
-    # Save instrumented IR
-    instrumented_ir_fname = f'{os.path.join(args.output_dir, basename)}.instrumented.gtirb'
-    instrumented_ir.save_protobuf(instrumented_ir_fname)
-    log.info(f'Instrumented IR saved to: {instrumented_ir_fname}')
-
-    # Generate assembly or binary if needed
+    # Save instrumented IR to file and generate assembly or binary if needed
     if args.gen_asm or args.gen_binary:
         output_basename= f'{os.path.join(args.output_dir, basename)}.instrumented'.replace('.exe', '')
-        rewriter.generate(instrumented_ir_fname,
-                          output_basename, args.output_dir,
+        rewriter.generate(output_basename, args.output_dir,
                           gen_assembly=args.gen_asm,
                           gen_binary=args.gen_binary)

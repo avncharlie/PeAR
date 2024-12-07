@@ -1,0 +1,19 @@
+#!/bin/sh
+
+# runs ddisasm via docker
+# assumes command format: ddisasm INPUT_FILE OPTION OUTPUT_FILE
+
+if [ "$#" -ne 3 ]; then
+    docker run --rm -it -v "$(pwd)":/workspace grammatech/ddisasm ddisasm "$@"
+    exit
+fi
+
+input_full_path=$(realpath "$1")
+input_basedir=$(dirname "$input_full_path")
+input_basename=$(basename "$input_full_path")
+
+output_full_path=$(realpath "$3")
+output_basedir=$(dirname "$output_full_path")
+output_basename=$(basename "$output_full_path")
+
+docker run --rm -it -v "$input_basedir":/input -v "$output_basedir":/output grammatech/ddisasm ddisasm input/"$input_basename" "$2" output/"$output_basename"

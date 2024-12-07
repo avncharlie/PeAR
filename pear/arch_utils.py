@@ -4,12 +4,23 @@ import gtirb
 import logging
 from typing import Optional
 
+from gtirb import Symbol, ProxyBlock
+import gtirb_rewriting._auxdata as _auxdata
+
 from .utils import run_cmd, check_executables_exist
 from . import DUMMY_LIB_NAME
 
 log = logging.getLogger(__name__)
 
 class ArchUtils:
+    @staticmethod
+    def check_compiler_exists() -> bool:
+        '''
+        Assert compiler accessible for current architecture
+        :return: if compiler found for current architecture
+        '''
+        raise NotImplementedError
+
     @staticmethod
     def backup_registers(label: str) -> str:
         '''
@@ -45,7 +56,7 @@ class ArchUtils:
         raise NotImplementedError
 
     @staticmethod
-    def generate(ir_file: str, output: str, working_dir: str, *args,
+    def generate(output: str, working_dir: str, ir: gtirb.IR, *args, 
                  gen_assembly: Optional[bool]=False,
                  gen_binary: Optional[bool]=False, 
                  obj_link: Optional[list[str]]=None, **kwargs):
@@ -54,7 +65,8 @@ class ArchUtils:
 
         :param ir_file: File location of GTIRB IR to generate from
         :param output: File location of output assembly and/or binary. '.exe'
-            will be added for output binary and '.S' for assembly.
+            will be added for output binary, '.S' for assembly and '.gtirb' for 
+            IR.
         :param working_dir: Local working directory to generate intermediary
             files
         :param gen_assembly: True if generating assembly
@@ -64,15 +76,20 @@ class ArchUtils:
         # The following is a stub that calls gtirb-pprinter on the IR directly.
         # No support for linking in static objects or any changes to default
         # gtirb-pprinter binary generation.
-        assert gen_assembly or gen_binary, \
-            "One of gen_assembly or gen_binary must be true"
-
-        if obj_link != None:
-            raise NotImplementedError
-
         basename = os.path.basename(output)
         asm_path = os.path.join(working_dir, f'{basename}.S')
         bin_path = os.path.join(working_dir, f'{basename}.exe')
+        ir_file = os.path.join(working_dir, f'{basename}.gtirb')
+
+        # Generate IR
+        ir.save_protobuf(ir_file)
+        log.info(f'Instrumented IR saved to: {ir_file}')
+
+        assert gen_assembly or gen_binary, \
+            "One of gen_assembly or gen_binary must be true"
+
+        if not (obj_link == None or obj_link == []):
+            raise NotImplementedError
 
         assert check_executables_exist(['gtirb-pprinter']), "gtirb-pprinter not found"
 
@@ -90,7 +107,281 @@ class ArchUtils:
         if gen_binary:
             log.info(f'Generated binary saved to: {bin_path}')
 
+class LinuxUtils(ArchUtils):
+    @staticmethod
+    def check_compiler_exists() -> bool:
+        assert check_executables_exist(['gcc', 'ld']), \
+            "GCC build tools not found"
+        return True
+
+    @staticmethod
+    def backup_registers(label: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def restore_registers(label: str) -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def call_function(func: str,
+                      save_stack: Optional[int]=0,
+                      pre_call: Optional[str]='',
+                      post_call: Optional[str]='') -> str:
+        raise NotImplementedError
+
+    @staticmethod
+    def generate_asm_external_symbol_stub(name: str, is_func: bool,
+                                          version: Optional[str]=None,
+                                          size: Optional[int] = 8) -> str:
+        """
+        Generate assembly stub for given function or data.
+
+        :param name: Name of symbol
+        :param is_func: True if function, False if data
+        :param version: Version string, if versioned
+        :returns: Assembly stub
+        """
+        ret = ''
+        if version:
+            ret += f'.symver {name},{name}@{version}\n'
+        ret += f'.globl {name}\n'
+        if is_func:
+            ret += f'.type {name}, @function\n'
+            ret += f'{name}:\nret\n\n'
+        else:
+            # If we don't specify the size, the linker won't generate a COPY
+            # relocation within the final generated binary
+            # (which is needed for data references)
+            ret += f'.size {name}, {size}\n'
+            ret += f'{name}:\n.byte {size}\n\n'
+        return ret
+
+    @staticmethod
+    def generate_versioned_dummy_libs(versioned_syms: dict[str, dict[str, list[Symbol]]],
+                                      elf_symbol_info: dict[Symbol, tuple[int, str, str, str, int]],
+                                      out_folder) -> dict[str, tuple[str, str]]:
+        """
+        Generate assembly and version map for dummy libraries that define
+        specific versioned symbols within those libraries
+        Creates output files in the out_folder.
+        e.g. for libc.so.6, generates:
+            - {out_folder}/dummy_libc.so.6.S
+            - {out_folder}/dummy_libc.so.6.version_map
+
+        :param versioned_syms: Mapping of symbols of specific versions within
+          libraries. e.g. {lib: {version: [symbol]}}
+        :param elf_symbol_info: elfSymbolInfo AuxData table (used for symbol
+                                                             type and size)
+        :param out_folder: Path of output folder.
+        :returns: {library: (generated asm, generated version map)}
+        """
+        ret = {}
+        for lib, versions in versioned_syms.items():
+            asm_p = os.path.join(out_folder, 'dummy_'+lib) + '.S'
+            # generate version map
+            version_map_p = os.path.join(out_folder, 'dummy_'+lib) + '.version_map'
+
+            with open(asm_p, 'w') as f:
+                text = '.section .text\n\n'
+                data = '.section .data\n\n'
+                
+                for version, symlist in versions.items():
+                    for sym in symlist:
+                        name = sym.name
+                        symsize, symtype, _, _, _ = elf_symbol_info[sym]
+                        if symtype == 'FUNC':
+                            text += LinuxUtils.generate_asm_external_symbol_stub(name, is_func=True, version=version)
+                        elif symtype == 'OBJECT':
+                            data += LinuxUtils.generate_asm_external_symbol_stub(name, is_func=False, version=version, size=symsize)
+                f.write(text)
+                f.write(data)
+            log.info(f"Generated assembly for dummy {lib} at: {asm_p}")
+
+            with open(version_map_p, 'w') as f:
+                for version, symlist in versions.items():
+                    f.write(version + " {\n  global:\n") #}
+                    for sym in symlist:
+                        f.write(f"    {sym.name};\n")
+                    f.write("};\n\n")
+            log.info(f"Generated version map for dummy {lib} at: {version_map_p}")
+            ret[lib] = (asm_p, version_map_p)
+        return ret
+
+    @staticmethod
+    def generate(output: str, working_dir: str, ir: gtirb.IR, *args, 
+                 gen_assembly: Optional[bool]=False,
+                 gen_binary: Optional[bool]=False, 
+                 obj_link: Optional[list[str]]=None, **kwargs):
+        basename = os.path.basename(output)
+        ir_file = os.path.join(working_dir, f'{basename}.gtirb')
+
+        # Generate IR
+        ir.save_protobuf(ir_file)
+        log.info(f'Instrumented IR saved to: {ir_file}')
+
+        assert gen_assembly or gen_binary, \
+            "At least one of gen_assembly or gen_binary must be true"
+
+        # Generate assembly (required for binary generation as well)
+        assert check_executables_exist(['gtirb-pprinter']), "gtirb-pprinter not found"
+
+        asm_fname = f'{output}.S' if gen_assembly else os.path.join(working_dir, f'{basename}.S')
+        cmd = ["gtirb-pprinter", ir_file, '--asm', asm_fname]
+        run_cmd(cmd)
+        log.info(f'Generated assembly saved to: {asm_fname}')
+
+        if not gen_binary:
+            return
+
+        # Get version info:
+        #  - store versioned symbols: lib: {version: [(sym, type)]}
+        #  - keep track of non-versioned symbols: [sym, type]
+        versioned_syms: dict[str, dict[str, list[Symbol]]] = {}
+        nonversioned_syms: list[Symbol] = []
+        external_libraries: list[str] = []
+        library_paths: list[str] = []
+        elf_symbol_info: dict[Symbol, tuple[int, str, str, str, int]] = {}
+        exec_stack: bool = False
+        stack_size: int = -1
+        binary_type: list[str] = []
+
+        assert len(ir.modules) == 1, "PeAR only supports one module GTIRB IRs"
+        for module in ir.modules:
+            # Get data from aux tables
+            symbol_to_version_map: dict[Symbol, tuple[int, bool]] # {SYMBOL: (ID, is_hidden)}
+            strong_versioned_syms: dict[Symbol, int] = {} # versioned sym:  ID
+            lib_version_imports: dict[str, dict[int, str]] = {} # lib: {ID: version}
+            exec_stack = module.aux_data['elfStackExec'].data
+            stack_size = module.aux_data['elfStackSize'].data
+            binary_type = _auxdata.binary_type.get_or_insert(module)
+            library_paths = _auxdata.library_paths.get_or_insert(module)
+            elf_symbol_info = _auxdata.elf_symbol_info.get_or_insert(module)
+            external_libraries = _auxdata.libraries.get_or_insert(module)
+            symbol_forwarding = _auxdata.symbol_forwarding.get_or_insert(module)
+            elf_symbol_versions = module.aux_data['elfSymbolVersions'].data
+            sym_version_defs, lib_version_imports, symbol_to_version_map = elf_symbol_versions
+
+            # Get external versioned syms, ignoring hidden symbols
+            for sym, (id, is_hidden) in symbol_to_version_map.items():
+                strong_versioned_syms[sym] = id
+
+            # Construct versioned_syms dict containing what symbols have what
+            # version in what libraries
+            id_to_lib_version: dict[int, tuple[str, str]] = {}
+            for lib, id_to_version in lib_version_imports.items():
+                versioned_syms[lib] = {}
+                for id, version in id_to_version.items():
+                    versioned_syms[lib][version] = []
+                    id_to_lib_version[id] = (lib, version)
+            for sym, id in strong_versioned_syms.items():
+                lib, version = id_to_lib_version[id]
+                versioned_syms[lib][version].append(sym)
+
+            # To get non-versioned external symbols we:
+            # - Collect all global, non-hidden symbols that aren't versioned.
+            # However, GTIRB miscategorises some non-versioned symbols as weak.
+            # Thankfully, these symbols appear to the ones in the symbol
+            # forwarding table that have the same before and after types (?)
+            # So we also:
+            # - Collect symbols with the same before and after type in the
+            #   symbol forwarding table.
+            for (before, after) in symbol_forwarding.items():
+                if before not in elf_symbol_info or after not in elf_symbol_info:
+                    continue
+                _, b_type, _, _, _ = elf_symbol_info[before]
+                _, a_type, _, _, _ = elf_symbol_info[after]
+                if b_type == a_type and after not in strong_versioned_syms:
+                    nonversioned_syms.append(after)
+            for sym, (_, _, binding, visibility, _) in elf_symbol_info.items():
+                if binding == 'GLOBAL' and visibility != 'HIDDEN' and sym not in strong_versioned_syms:
+                    nonversioned_syms.append(sym)
+
+        LinuxUtils.check_compiler_exists()
+
+        # We need to put unversioned symbol definitions somewhere...
+        # We could weaken them, but I don't want to do that, as that would
+        # require the objcopy tool from binutils, and I don't want extra
+        # dependencies.
+        # So we simply add them to the first library we generate, versioned or
+        # non-versioned. As non-versioned symbols aren't tied to library name,
+        # it doesn't matter what library we generate them under
+        text = '.section .text\n\n'
+        data = '.section .data\n\n'
+        for sym in nonversioned_syms:
+            name = sym.name
+            symsize, symtype, _, _, _ = elf_symbol_info[sym]
+            if symtype == 'FUNC':
+                text += LinuxUtils.generate_asm_external_symbol_stub(name, is_func=True)
+            elif symtype == 'OBJECT':
+                data += LinuxUtils.generate_asm_external_symbol_stub(name, is_func=False, size=symsize)
+        non_versioned_stubs = text + data
+        added_non_versioned_stubs = False
+
+        # Generate stub libraries 
+        dummy_lib_to_asm_version_map: dict[str, tuple[str, str]] = \
+                LinuxUtils.generate_versioned_dummy_libs(versioned_syms, elf_symbol_info, working_dir)
+        dummy_libs = []
+        for lib, (asm, version_map) in dummy_lib_to_asm_version_map.items():
+            if not added_non_versioned_stubs:
+                with open(asm, "a") as f:
+                    f.write(non_versioned_stubs)
+                    added_non_versioned_stubs = True
+            dummy_lib = os.path.join(working_dir, lib)
+            dummy_libs.append(lib)
+            cmd = ['gcc', '-shared', '-fPIC', asm, f'-Wl,--version-script={version_map}', '-o', dummy_lib, '-nodefaultlibs']
+            run_cmd(cmd)
+
+        # Generate non-versioned stub libraries
+        non_versioned_libs = []
+        for lib in external_libraries:
+            if lib not in dummy_libs:
+                non_versioned_libs.append(lib)
+        for lib in non_versioned_libs:
+            libpath = os.path.join(working_dir, lib) + '.S'
+            with open(libpath, 'w') as f:
+                if not added_non_versioned_stubs:
+                    f.write(non_versioned_stubs)
+                    added_non_versioned_stubs = True
+            dummy_lib = os.path.join(working_dir, lib)
+            dummy_libs.append(lib)
+            cmd = ['gcc', '-shared', '-fPIC', libpath, '-o', dummy_lib, '-nodefaultlibs']
+            run_cmd(cmd)
+
+        # Generate object from instrumented assembly
+        obj_name = f'{basename}.o'
+        obj_path = os.path.join(working_dir, obj_name)
+        cmd = ['gcc', '-c', '-o', obj_path, asm_fname, '-nodefaultlibs', '-nostartfiles']
+        run_cmd(cmd)
+
+        # Collect rpaths
+        rpath_cmd = []
+        for rpath in library_paths:
+            rpath_cmd += ['-rpath', rpath]
+
+        # Set exec stack as in original binary
+        exec_stack_cmd = ['-z', 'execstack' if exec_stack else 'noexecstack']
+
+        # Set stack size (most binaries this is zero, meaning set to default stack size)
+        stack_size_cmd = ['-z', f'stack-size={stack_size}']
+
+        # Set pie or not
+        pie_cmd = ['-pie' if 'PIE' in binary_type else '-no-pie']
+
+        # Link it all together
+        binary_path = f'{output}.exe'
+        bin_name = f'{basename}.exe'
+        cmd = ['ld', '-o', bin_name, obj_name] + dummy_libs + pie_cmd + exec_stack_cmd + ['-z', 'relro'] + stack_size_cmd + rpath_cmd
+        run_cmd(cmd, working_dir=working_dir)
+
+        log.info(f'Generated binary saved to: {binary_path}')
+
 class WindowsUtils(ArchUtils):
+    @staticmethod
+    def check_compiler_exists() -> bool:
+        assert check_executables_exist(['cl']), \
+            "MSVC build tools not found, are you running in a developer command prompt?"
+        return True
+
     @staticmethod
     def generate_def_file(ir: gtirb.IR, out_folder: str,
                         ignore_dlls: Optional[list[str]]=None) -> dict[str, str]:
@@ -139,6 +430,7 @@ class WindowsUtils(ArchUtils):
 
         return def_file_mappings
 
+    @staticmethod
     def asm_fix_lib_names(asm: str, def_files: dict[str, str]) -> str:
         '''
         Modify GTIRB generated assembly to link to our lib files.
@@ -175,6 +467,7 @@ class WindowsUtils(ArchUtils):
         asm = asm.replace(dummy_lib_include, '')
         return asm
 
+    @staticmethod
     def asm_fix_func_name_collisions(asm: str, names: list[str]) -> str:
         '''
         Ignore keywords that conflict with names of functions.
@@ -193,7 +486,7 @@ class WindowsUtils(ArchUtils):
         return ignore_keywords + asm
 
     @staticmethod
-    def generate(ir_file: str, output: str, working_dir: str, ir: gtirb.IR,
+    def generate(output: str, working_dir: str, ir: gtirb.IR,
                     gen_assembly: Optional[bool]=False,
                     gen_binary: Optional[bool]=False,
                     obj_link: Optional[list[str]]=None):
@@ -205,7 +498,6 @@ class WindowsUtils(ArchUtils):
         We use our own build process as gtirb-pprinter's PE binary printing doesn't
         allow us to link our own static libraries into the generated binary.
 
-        :param ir_file: File location of GTIRB IR to generate from
         :param ir: GTIRB IR being printed (loaded version of ir_file)
         :param output: File location of output assembly and/or binary. '.exe' will
             be added for output binary and '.S' for assembly.
@@ -214,11 +506,16 @@ class WindowsUtils(ArchUtils):
         :param gen_binary: True if generating binary
         :param obj_link: Path of object to link into instrumented binary.
         """
-        assert gen_assembly or gen_binary, \
-            "At least one of gen_assembly or gen_binary must be true"
-
         is_64bit = ir.modules[0].isa == gtirb.Module.ISA.X64
         basename = os.path.basename(output)
+        ir_file = os.path.join(working_dir, f'{basename}.gtirb')
+
+        # Generate IR
+        ir.save_protobuf(ir_file)
+        log.info(f'Instrumented IR saved to: {ir_file}')
+
+        assert gen_assembly or gen_binary, \
+            "At least one of gen_assembly or gen_binary must be true"
 
         # Generate assembly (required for binary generation as well)
         assert check_executables_exist(['gtirb-pprinter']), "gtirb-pprinter not found"
@@ -278,6 +575,15 @@ class WindowsUtils(ArchUtils):
         log.info(f'Generated binary saved to: {binary_path}')
 
 class WindowsX86Utils(WindowsUtils):
+    @staticmethod
+    def check_compiler_exists() -> bool:
+        if WindowsUtils.check_compiler_exists():
+            cl_out, _ = run_cmd(["cl"], print=False)
+            assert b"for x86" in cl_out, \
+                "32-bit MSVC build tools must be used to generate 32-bit instrumented binary"
+            return True
+        return False
+
     @staticmethod
     def backup_registers(label: str) -> str:
         return f'''
@@ -354,6 +660,15 @@ class WindowsX86Utils(WindowsUtils):
         '''
 
 class WindowsX64Utils(WindowsUtils):
+    @staticmethod
+    def check_compiler_exists() -> bool:
+        if WindowsUtils.check_compiler_exists():
+            cl_out, _ = run_cmd(["cl"], print=False)
+            assert b"for x64" in cl_out, \
+                "64-bit MSVC build tools must be used to generate 64-bit instrumented binary"
+            return True
+        return False
+
     @staticmethod
     def backup_registers(label: str) -> str:
         return f'''
