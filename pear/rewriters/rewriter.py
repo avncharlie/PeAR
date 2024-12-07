@@ -38,27 +38,22 @@ class Rewriter:
         raise NotImplementedError
 
     def generate(self,
-                 ir_file: str, output: str, working_dir: str, *args,
+                 output: str, working_dir: str, *args,
                  gen_assembly: Optional[bool]=False,
                  gen_binary: Optional[bool]=False,
                  **kwargs):
         """
         Generate binary or assembly from instrumented IR.
 
-        :param ir_file: File location of GTIRB IR to generate from
         :param output: File location of output assembly and/or binary. '.exe'
-            will be added for output binary and '.S' for assembly.
+            will be added for output binary, '.S' for assembly and '.gtirb' for 
+            IR.
         :param working_dir: Local working directory to generate intermediary
             files
         :param gen_assembly: True if generating assembly
         :param gen_binary: True if generating binary
         """
-        # Calls generic generation method.
-        # More advanced rewriters that need to do things like compiling and 
-        # linking in their own compiled objects will need to override this.
-        ArchUtils.generate(ir_file, output, working_dir,
-                           gen_assembly=gen_assembly,
-                           gen_binary=gen_binary)
+        raise NotImplementedError
 
     @staticmethod
     def build_parser(parser: argparse._SubParsersAction):
