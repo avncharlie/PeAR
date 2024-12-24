@@ -4,6 +4,7 @@ import glob
 import pytest
 import shutil
 import pathlib
+import platform
 import textwrap
 import importlib
 import subprocess
@@ -14,6 +15,7 @@ from enum import Enum
 from typing import NamedTuple
 
 from ..utils import run_cmd, check_executables_exist
+from .conftest import windows_only, get_gen_binary_from_pear_output
 
 TEST_PROG_DIR = importlib.resources.files(__package__) / 'test_programs'
 WINAFL_TIMEOUT=30
@@ -217,6 +219,7 @@ def prepare_test_program(request: pytest.FixtureRequest) -> TargetProgram:
 
 # prepare_test_program will be called with program build fixtures as parameters
 # and will call them to generate a TargetProgram
+@windows_only
 @pytest.mark.parametrize(
     'prepare_test_program,arch',
     [
@@ -251,15 +254,7 @@ def test_winafl_rewriter(
     pear_cmd = f'{sys.executable} -m pear --input-binary {test_prog.binary_path} --output-dir {out_dir} --gen-binary WinAFL --target-func {hex(test_prog.target_func_address)}'
     cmd = ['cmd', '/c', f'{devcmd_bat} & {pear_cmd}']
     out, _ = run_cmd(cmd)
-
-    # Find instrumented binary through parsing pear output (pretty messy)
-    out = out.decode()
-    gen_binary_line = 'Generated binary saved to: '
-    inst_prog = None
-    for l in out.splitlines():
-        if gen_binary_line in l:
-            inst_prog = l.split(gen_binary_line)[-1] # get instrumented filename
-            inst_prog = inst_prog[:-4] # remove color unicode characters at end
+    inst_prog = get_gen_binary_from_pear_output(out)
 
     # Check instrumented binary exists
     assert inst_prog != None and os.path.isfile(inst_prog), "Instrumented binary not found after PeAR was run"
