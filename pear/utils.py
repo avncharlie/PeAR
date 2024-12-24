@@ -1,5 +1,6 @@
 # Generic utility functions
 
+import os
 import sys
 import uuid
 import shutil
@@ -21,7 +22,8 @@ log = logging.getLogger(__name__)
 def run_cmd(cmd: list[str],
             check: Optional[bool]=True,
             print: Optional[bool]=True,
-            working_dir: Optional[str]= None) -> tuple[bytes, int]:
+            working_dir: Optional[str]=None,
+            env_vars: Optional[dict]=None) -> tuple[bytes, int]:
     """
     Run command and capture its output and return code. Stream command stdout
     and stderr to stdout as it is produced. Not very efficient.
@@ -31,6 +33,7 @@ def run_cmd(cmd: list[str],
     :param print: True if command output should be printed
     :param working_dir: Working directory command should be executed in. Will
         execute in current dir by default.
+    :param env_vars: A dictionary of environment variables to set for the command.
     :returns: A tuple of (command output, return code)
     """
     # TODO: remove colours
@@ -40,9 +43,13 @@ def run_cmd(cmd: list[str],
     log.info("Executing: " + green +  " ".join(cmd) + end)
     output = b""
 
-    process : subprocess.Popen = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                                  stderr=subprocess.STDOUT,
-                                                  cwd=working_dir)
+    env = dict(os.environ)
+    if env_vars:
+        env.update(env_vars)
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT,
+                               cwd=working_dir, env=env)
     for c in iter(lambda: process.stdout.read(1), b""):
         if print:
             sys.stdout.buffer.write(c)
@@ -54,6 +61,7 @@ def run_cmd(cmd: list[str],
     if check and r_code != 0:
         raise subprocess.CalledProcessError(r_code, cmd)
     return (output, r_code)
+
 
 def check_executables_exist(to_check: list[str]) -> bool:
     """
