@@ -120,17 +120,10 @@ Hint: running a docker container? Check volume mount location')
             the same binary.
         ''')
     )
-    optional.add_argument(
-        '--regenerate', type=path_exists, required=False,
-        help=textwrap.dedent('''\
-            Given assembly (output from PeAR), attempt to generate an
-            instrumented binary from it.
-         ''')
-    )
 
     # Add rewriter subcommands
-    rewriter_parsers = parser.add_subparsers(dest='rewriter',
-                                             help='Available rewriters',
+    rewriter_parsers = parser.add_subparsers(dest='tool',
+                                             help='Available tools',
                                              required=True)
     for r in REWRITERS:
         r.build_parser(rewriter_parsers)
@@ -138,7 +131,7 @@ Hint: running a docker container? Check volume mount location')
     args = parser.parse_args()
 
     # Get chosen rewriter class
-    args.rewriter = REWRITER_MAP[args.rewriter]
+    args.rewriter = REWRITER_MAP[args.tool]
 
     # Check output dir empty
     if not args.ignore_nonempty:

@@ -10,8 +10,8 @@ from .rewriters.winafl.winafl_rewriter import WinAFLRewriter
 from .rewriters.aflpp.aflpp_rewriter import AFLPlusPlusRewriter
 from .rewriters.identity import IdentityRewriter
 from .rewriters.debug_rewrite import DebugRewriter
+from .rewriters.regenerate import RegenerateRewriter
 
-REWRITERS = [WinAFLRewriter, IdentityRewriter, DebugRewriter]
-REWRITERS = [WinAFLRewriter, AFLPlusPlusRewriter, IdentityRewriter]
+REWRITERS = [WinAFLRewriter, AFLPlusPlusRewriter, IdentityRewriter, RegenerateRewriter]
 
 REWRITER_MAP = {r.name(): r for r in REWRITERS}
