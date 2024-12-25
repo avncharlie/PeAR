@@ -277,21 +277,8 @@ class LinuxUtils(ArchUtils):
                 lib, version = id_to_lib_version[id]
                 versioned_syms[lib][version].append(sym)
 
-            # To get non-versioned external symbols we:
-            # - Collect all global, non-hidden symbols that aren't versioned.
-            # However, GTIRB miscategorises some non-versioned symbols as weak.
-            # Thankfully, these symbols appear to the ones in the symbol
-            # forwarding table that have the same before and after types (?)
-            # So we also:
-            # - Collect symbols with the same before and after type in the
-            #   symbol forwarding table.
-            for (before, after) in symbol_forwarding.items():
-                if before not in elf_symbol_info or after not in elf_symbol_info:
-                    continue
-                _, b_type, _, _, _ = elf_symbol_info[before]
-                _, a_type, _, _, _ = elf_symbol_info[after]
-                if b_type == a_type and after not in strong_versioned_syms:
-                    nonversioned_syms.append(after)
+            # To get non-versioned external symbols we collect all global,
+            # non-hidden symbols that aren't versioned.
             for sym, (_, _, binding, visibility, _) in elf_symbol_info.items():
                 if binding == 'GLOBAL' and visibility != 'HIDDEN' and sym not in strong_versioned_syms:
                     nonversioned_syms.append(sym)

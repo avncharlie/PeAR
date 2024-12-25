@@ -1,6 +1,8 @@
 import pytest
 import platform
 
+from ..utils import run_cmd
+
 def pytest_addoption(parser):
     parser.addoption("--vcvarsall-loc", action="store")
     parser.addoption("--winafl32-afl-fuzz-loc", action="store")
@@ -36,6 +38,18 @@ windows_only = pytest.mark.skipif(
 linux_only = pytest.mark.skipif(
     platform.system() != 'Linux', reason="Linux only test"
 )
+
+docker_installed = pytest.mark.skipif(
+    not (lambda: _is_docker_working()), reason="Docker is not installed or not working"
+)
+
+def _is_docker_working():
+    try:
+        # Run a simple Docker command to check if Docker is working
+        output, _ = run_cmd(["docker", "run", "--rm", "hello-world"], print=False)
+        return b"Hello from Docker!" in output
+    except:
+        return False
 
 def get_gen_binary_from_pear_output(output: bytes) -> str: 
     # Find instrumented binary through parsing pear output (pretty messy)
