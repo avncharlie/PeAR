@@ -17,11 +17,11 @@ To use the wrappers yourself, run `source ./enable_wrappers.sh`. Then run `deact
 ## Run tests
 To start tests, run: `pytest .\pear\ -v -rA -s --ir-cache IR_CACHE --vcvarsall-loc VCVARSALL_LOC --winafl32-afl-fuzz-loc AFL32_LOC --winafl64-afl-fuzz-loc AFL64_LOC`.
 
-For linux, use `pytest.sh` (which sets up docker wrappers for GTIRB tools).
+For linux, use `pytest.sh` (which sets up docker wrappers for the GTIRB tools).
 
-The `==ir-cache` argument is optional but recommended to speed up the tests.
-Provide it an empty directory (which it will store cached IR files generated
-during the test run).
+The `--ir-cache` argument is optional but recommended to speed up the tests.
+Provide it an empty directory (which it will cache IR files generated during
+the test run).
 
 
 Running tests requires:
