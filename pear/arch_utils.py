@@ -102,7 +102,7 @@ class ArchUtils:
 
         gen_args = []
         if gen_assembly:
-            gen_args += ['--asm', asm_path]
+            gen_args += ['--syntax', 'intel', '--asm', asm_path]
         if gen_binary:
             gen_args += ['--binary', bin_path]
 
@@ -235,7 +235,7 @@ class LinuxUtils(ArchUtils):
 
         if not asm_fname:
             asm_fname = f'{output}.S' if gen_assembly else os.path.join(working_dir, f'{basename}.S')
-            cmd = ["gtirb-pprinter", ir_file, '--asm', asm_fname]
+            cmd = ["gtirb-pprinter", ir_file, '--syntax', 'intel', '--asm', asm_fname]
             run_cmd(cmd)
             log.info(f'Generated assembly saved to: {asm_fname}')
 
