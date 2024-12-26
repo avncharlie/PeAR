@@ -29,8 +29,14 @@ class RegenerateRewriter(Rewriter):
             Regenerate binary from assembly source. Will attempt to regenerate binary with
             the same properties of the given input binary (i.e shared libs, rpath, pie, etc)""")
 
+        def path_exists(f):
+            if not pathlib.Path(f).exists():
+                parser.error(f'Assembly file "{f}" not found')
+            else:
+                return f
+
         parser.add_argument(
-            '--from-asm', required=True, 
+            '--from-asm', required=True, type=path_exists,
             help='Assembly source to generate from',
         )
 
@@ -48,6 +54,7 @@ class RegenerateRewriter(Rewriter):
                  mappings: OrderedDict[int, uuid.UUID]):
         self.ir = ir
         self.link: list[str] = args.link
+        self.asm: str = args.from_asm
         self.is_64bit = ir.modules[0].isa == gtirb.Module.ISA.X64
         self.is_windows = ir.modules[0].file_format == gtirb.Module.FileFormat.PE
         self.is_linux = ir.modules[0].file_format == gtirb.Module.FileFormat.ELF
@@ -72,40 +79,6 @@ class RegenerateRewriter(Rewriter):
             LinuxUtils.check_compiler_exists()
 
     def rewrite(self) -> gtirb.IR:
-        # prepare for generation
-
-        for module in self.ir.modules:
-            # Get data from aux tables
-            elf_symbol_info = _auxdata.elf_symbol_info.get_or_insert(module)
-            elf_symbol_versions = module.aux_data['elfSymbolVersions'].data
-            sym_version_defs,lib_version_imports, symbol_to_version_map = elf_symbol_versions
-            lib_version_imports: dict[str, dict[int, str]] # {'libc.so.6': {2: 'GLIBC_2.2.5', 4: 'GLIBC_2.14'}}
-            symbol_to_version_map: dict[Symbol, tuple[int, bool]] # {SYMBOL: (ID, is_hidden)}
-
-            # Generate mapping from version ID -> (version string, lib)
-            id_to_version: dict[int, tuple[str, str]] = {}
-            for lib, versions in lib_version_imports.items():
-                for version_id, version_string in versions.items():
-                    id_to_version[version_id] = (version_string, lib)
-
-            strong_versioned_syms: dict[Symbol, int] = {}
-
-            # Get weak symbols
-            weak_syms = []
-            for symbol, (_, _, binding, _, _) in elf_symbol_info.items():
-                if binding == "WEAK":
-                    weak_syms.append(symbol)
-
-            # Get external versioned syms, ignoring weak symbols
-            for sym, (id, is_hidden) in symbol_to_version_map.items():
-                if not is_hidden and sym not in weak_syms:
-                    strong_versioned_syms[sym] = id
-
-            # Convert remaining external non-versioned syms to weak symbols
-            for symbol, (a, sym_type, binding, visibility, b) in elf_symbol_info.items():
-                if binding == "GLOBAL" and isinstance(symbol._payload, ProxyBlock) and symbol not in strong_versioned_syms:
-                    elf_symbol_info[symbol] = (a, sym_type, "WEAK", visibility, b)
-
         return self.ir
 
     def generate(self, output: str, working_dir: str, *args,
@@ -114,14 +87,16 @@ class RegenerateRewriter(Rewriter):
                  **kwargs):
         if self.is_windows:
             WindowsUtils.generate(output, working_dir, self.ir,
+                                  asm_fname=self.asm,
                                   gen_assembly=gen_assembly,
                                   gen_binary=gen_binary, obj_link=self.link)
         if self.is_linux:
-            # pass
             LinuxUtils.generate(output, working_dir, self.ir,
-                               gen_assembly=gen_assembly,
-                               gen_binary=gen_binary, obj_link=self.link)
+                                asm_fname=self.asm,
+                                gen_assembly=gen_assembly,
+                                gen_binary=gen_binary, obj_link=self.link)
         else:
             ArchUtils.generate(output, working_dir, self.ir,
+                               asm_fname=self.asm,
                                gen_assembly=gen_assembly,
                                gen_binary=gen_binary, obj_link=self.link)

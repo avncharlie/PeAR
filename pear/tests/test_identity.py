@@ -100,6 +100,7 @@ def test_identity_complex(tmp_path_factory: pytest.TempPathFactory):
 
 @linux_only
 @docker_installed
+@pytest.mark.slow
 def test_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory):
     image = "grammatech/ddisasm"
 
