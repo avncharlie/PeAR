@@ -4,7 +4,6 @@ import platform
 from ..utils import run_cmd
 
 def pytest_addoption(parser):
-    print("pytest_addoption called")
     parser.addoption("--vcvarsall-loc", action="store")
     parser.addoption("--winafl32-afl-fuzz-loc", action="store")
     parser.addoption("--winafl64-afl-fuzz-loc", action="store")
