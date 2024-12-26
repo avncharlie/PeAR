@@ -230,10 +230,10 @@ class LinuxUtils(ArchUtils):
         assert gen_assembly or gen_binary, \
             "At least one of gen_assembly or gen_binary must be true"
 
-        # Generate assembly (required for binary generation as well)
-        assert check_executables_exist(['gtirb-pprinter']), "gtirb-pprinter not found"
-
         if not asm_fname:
+            # Generate assembly (required for binary generation as well)
+            assert check_executables_exist(['gtirb-pprinter']), "gtirb-pprinter not found"
+
             asm_fname = f'{output}.S' if gen_assembly else os.path.join(working_dir, f'{basename}.S')
             cmd = ["gtirb-pprinter", ir_file, '--syntax', 'intel', '--asm', asm_fname]
             run_cmd(cmd)
@@ -514,8 +514,6 @@ class WindowsUtils(ArchUtils):
         :param gen_binary: True if generating binary
         :param obj_link: Path of object to link into instrumented binary.
         """
-        if asm_fname:
-            raise NotImplementedError
         is_64bit = ir.modules[0].isa == gtirb.Module.ISA.X64
         basename = os.path.basename(output)
         ir_file = os.path.join(working_dir, f'{basename}.gtirb')
@@ -527,32 +525,37 @@ class WindowsUtils(ArchUtils):
         assert gen_assembly or gen_binary, \
             "At least one of gen_assembly or gen_binary must be true"
 
-        # Generate assembly (required for binary generation as well)
-        assert check_executables_exist(['gtirb-pprinter']), "gtirb-pprinter not found"
-        asm_fname = f'{output}.S' if gen_assembly else os.path.join(working_dir, f'{basename}.S')
-        cmd = ["gtirb-pprinter", ir_file, '--asm', asm_fname]
-        run_cmd(cmd)
-        log.info(f'Generated assembly saved to: {asm_fname}')
-
-        # Apply modifications to assembly
-        asm = None
-        with open(asm_fname, 'r') as f:
-            asm = f.read()
-        assert asm != None
-
-        # Generate def files to use for linking dlls in final binary and link 
-        # into assembly
+        # Generate def files to use for linking dlls in final binary 
         def_files = WindowsUtils.generate_def_file(ir, working_dir,
                                                    ignore_dlls=[DUMMY_LIB_NAME])
-        asm = WindowsUtils.asm_fix_lib_names(asm, def_files)
 
-        # Some functions share the name of assembly keywords. Fix these
-        # collisions in the generated assembly
-        asm = WindowsUtils.asm_fix_func_name_collisions(asm, ['fabs'])
+        # If given existing assembly to generate from, assume it has already
+        # been modified from a previous tool
+        if not asm_fname:
+            # Generate assembly (required for binary generation as well)
+            assert check_executables_exist(['gtirb-pprinter']), "gtirb-pprinter not found"
 
-        # Write back modified ASM
-        with open(asm_fname, 'w') as f:
-            f.write(asm)
+            asm_fname = f'{output}.S' if gen_assembly else os.path.join(working_dir, f'{basename}.S')
+            cmd = ["gtirb-pprinter", ir_file, '--asm', asm_fname]
+            run_cmd(cmd)
+            log.info(f'Generated assembly saved to: {asm_fname}')
+
+            # Apply modifications to assembly
+            asm = None
+            with open(asm_fname, 'r') as f:
+                asm = f.read()
+            assert asm != None
+
+            # Fixup asm with new, previously generated def file names 
+            asm = WindowsUtils.asm_fix_lib_names(asm, def_files)
+
+            # Some functions share the name of assembly keywords. Fix these
+            # collisions in the generated assembly
+            asm = WindowsUtils.asm_fix_func_name_collisions(asm, ['fabs'])
+
+            # Write back modified ASM
+            with open(asm_fname, 'w') as f:
+                f.write(asm)
 
         if not gen_binary:
             return
