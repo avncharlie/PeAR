@@ -22,13 +22,28 @@ from .rewriters.rewriter import Rewriter
 # TODO: remove this color stuff
 green = '\033[92m'
 blue = '\033[94m'
+yellow = '\033[93m'
+red = '\033[91m'
+magenta = '\033[95m'
 end = '\033[0m'
-logging.basicConfig(
-    stream=sys.stdout,
-    level=logging.INFO,
-    format=blue + "%(levelname)s - %(name)s - %(message)s" + end
-)
+
+class CustomFormatter(logging.Formatter):
+    LEVEL_COLORS = {
+        logging.INFO: blue,
+        logging.WARNING: yellow,
+        logging.ERROR: red,
+        logging.CRITICAL: magenta,
+    }
+    def format(self, record):
+        color = self.LEVEL_COLORS.get(record.levelno, '')
+        log_msg = f"{color}{record.levelname} - {record.name} - {record.msg}{end}"
+        return log_msg
+handler = logging.StreamHandler(sys.stdout)
+formatter = CustomFormatter("%(levelname)s - %(name)s - %(message)s")
+handler.setFormatter(formatter)
 log = logging.getLogger(__package__)
+log.setLevel(logging.INFO)
+log.addHandler(handler)
 
 def main_descriptions():
     return '''\
