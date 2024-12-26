@@ -12,10 +12,17 @@ Add WinAFL instrumentation to x86 and x64 binaries.
 
 ## Run through Docker
 Make sure docker is installed and you can run it, then use `./PeAR.sh`. The shell script uses wrappers for `ddisasm` and `gtirb-pprinter` that passthrough to docker.
+To use the wrappers yourself, run `source ./enable_wrappers.sh`. Then run `deactivate_wrappers` to remove them.
 
 ## Run tests
-To start tests, run: `pytest .\pear\ -v -rA -s --ir-cache IR_CACHE --vcvarsall-loc VCVARSALL_LOC --winafl32-afl-fuzz-loc AFL32_LOC --winafl64-afl-fuzz-loc AFL64_LOC`
-For linux, use `pytest.sh` to use wrappers.
+To start tests, run: `pytest .\pear\ -v -rA -s --ir-cache IR_CACHE --vcvarsall-loc VCVARSALL_LOC --winafl32-afl-fuzz-loc AFL32_LOC --winafl64-afl-fuzz-loc AFL64_LOC`.
+
+For linux, use `pytest.sh` (which sets up docker wrappers for GTIRB tools).
+
+The `==ir-cache` argument is optional but recommended to speed up the tests.
+Provide it an empty directory (which it will store cached IR files generated
+during the test run).
+
 
 Running tests requires:
 1. The location of your `vcvarsall.bat`. This is used to run the MSVC
