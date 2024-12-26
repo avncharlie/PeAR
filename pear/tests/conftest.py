@@ -4,9 +4,11 @@ import platform
 from ..utils import run_cmd
 
 def pytest_addoption(parser):
+    print("pytest_addoption called")
     parser.addoption("--vcvarsall-loc", action="store")
     parser.addoption("--winafl32-afl-fuzz-loc", action="store")
     parser.addoption("--winafl64-afl-fuzz-loc", action="store")
+    parser.addoption("--ir-cache", action="store")
     parser.addoption("--hide-afl-ui", action="store_true")
 
 @pytest.fixture(scope='session')
@@ -30,6 +32,10 @@ def winafl_64_loc(request) -> str:
 @pytest.fixture
 def hide_afl_ui(request) -> bool:
     return request.config.getoption("--hide-afl-ui")
+
+@pytest.fixture
+def ir_cache(request) -> bool:
+    return request.config.getoption("--ir-cache")
 
 windows_only = pytest.mark.skipif(
     platform.system() != 'Windows', reason="Windows only test"
