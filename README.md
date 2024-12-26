@@ -2,6 +2,7 @@
 
 Add WinAFL instrumentation to x86 and x64 binaries.
 
+
 ## Run locally
 1. Download `ddisasm` and `gtirb-pprinter` binaries here: https://download.grammatech.com/gtirb/files/windows-release/, and put them on your PATH.
 2. Install python 3, max version python 3.10.
@@ -10,17 +11,11 @@ Add WinAFL instrumentation to x86 and x64 binaries.
 3. Run `python -m pear -h` or `.\PeAR.bat -h` to get started.
 
 ## Run through Docker
-Note: to generate Windows binaries you must run PeAR locally as it requires
-access to MSVC build tools. Only instrumented assembly can be generated when
-running in Docker.
-
-1. Run `build.sh` to build the required Docker image.
-2. Modify `PeAR.sh` as you require.
-3. Run `PeAR.sh -h` to get started.
+Make sure docker is installed and you can run it, then use `./PeAR.sh`. The shell script uses wrappers for `ddisasm` and `gtirb-pprinter` that passthrough to docker.
 
 ## Run tests
-
-To start tests, run: `pytest .\pear\ -v -rA -s --vcvarsall-loc VCVARSALL_LOC --winafl32-afl-fuzz-loc AFL32_LOC --winafl64-afl-fuzz-loc AFL64_LOC`
+To start tests, run: `pytest .\pear\ -v -rA -s --ir-cache IR_CACHE --vcvarsall-loc VCVARSALL_LOC --winafl32-afl-fuzz-loc AFL32_LOC --winafl64-afl-fuzz-loc AFL64_LOC`
+For linux, use `pytest.sh` to use wrappers.
 
 Running tests requires:
 1. The location of your `vcvarsall.bat`. This is used to run the MSVC
