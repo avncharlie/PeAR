@@ -79,7 +79,7 @@ be possible."""
             WindowsUtils.generate(output, working_dir, self.ir,
                                   gen_assembly=gen_assembly,
                                   gen_binary=gen_binary, obj_link=self.link)
-        if self.is_linux:
+        elif self.is_linux:
             LinuxUtils.generate(output, working_dir, self.ir,
                                gen_assembly=gen_assembly,
                                gen_binary=gen_binary, obj_link=self.link)
