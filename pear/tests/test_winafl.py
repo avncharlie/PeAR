@@ -239,6 +239,7 @@ def test_winafl_rewriter(
     winafl_64_loc: str,
     tmp_path_factory: pytest.TempPathFactory,
     hide_afl_ui: bool,
+    ir_cache: bool,
     devcmd_bat: str
 ):
     test_prog = prepare_test_program
@@ -251,7 +252,10 @@ def test_winafl_rewriter(
 
     # Use pear to instrument test program
     out_dir = tmp_path_factory.mktemp('out')
-    pear_cmd = f'{sys.executable} -m pear --input-binary {test_prog.binary_path} --output-dir {out_dir} --gen-binary WinAFL --target-func {hex(test_prog.target_func_address)}'
+    ir_cache_arg = ''
+    if ir_cache:
+        ir_cache_arg = f'--ir-cache {ir_cache}'
+    pear_cmd = f'{sys.executable} -m pear {ir_cache_arg} --input-binary {test_prog.binary_path} --output-dir {out_dir} --gen-binary WinAFL --target-func {hex(test_prog.target_func_address)}'
     cmd = ['cmd', '/c', f'{devcmd_bat} & {pear_cmd}']
     out, _ = run_cmd(cmd)
     inst_prog = get_gen_binary_from_pear_output(out)

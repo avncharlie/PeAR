@@ -17,7 +17,8 @@ BUILD_LIBFOO = ['gcc', '-shared', '-fPIC', 'libfoo.c', '-o', 'libfoo.so', '-node
 BUILD_FOO_BASE = ['gcc', '-o', BIN_NAME, 'main.c', '-Wl,--no-as-needed', '-L.', '-lfoo']
 
 @linux_only
-def test_identity_simple(tmp_path_factory: pytest.TempPathFactory):
+def test_identity_simple(tmp_path_factory: pytest.TempPathFactory,
+                         ir_cache: bool):
     build_dir = tmp_path_factory.mktemp('build')
     shutil.copytree(TEST_IDENTIY_DIR, build_dir, dirs_exist_ok=True)
 
@@ -27,8 +28,11 @@ def test_identity_simple(tmp_path_factory: pytest.TempPathFactory):
     out_dir = tmp_path_factory.mktemp('out')
     binary = os.path.join(build_dir, BIN_NAME)
 
-    pear_cmd = [sys.executable, '-m', 'pear', '--input-binary', binary,
-                '--output-dir', str(out_dir), '--gen-binary', 'Identity']
+    ir_cache_arg = []
+    if ir_cache:
+        ir_cache_arg = ['--ir-cache', ir_cache]
+    pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + \
+        ['--input-binary', binary, '--output-dir', str(out_dir), '--gen-binary', 'Identity']
     out, _ = run_cmd(pear_cmd)
     identity = get_gen_binary_from_pear_output(out)
 
@@ -39,7 +43,8 @@ def test_identity_simple(tmp_path_factory: pytest.TempPathFactory):
     assert r == 0 and b'foo is: 42\n' in out and b'foo is: 420\n' in out
 
 @linux_only
-def test_identity_complex(tmp_path_factory: pytest.TempPathFactory):
+def test_identity_complex(tmp_path_factory: pytest.TempPathFactory,
+                         ir_cache: bool):
     build_dir = tmp_path_factory.mktemp('build')
     shutil.copytree(TEST_IDENTIY_DIR, build_dir, dirs_exist_ok=True)
 
@@ -68,8 +73,11 @@ def test_identity_complex(tmp_path_factory: pytest.TempPathFactory):
     out_dir = tmp_path_factory.mktemp('out')
     binary = os.path.join(build_dir, BIN_NAME)
 
-    pear_cmd = [sys.executable, '-m', 'pear', '--input-binary', binary,
-                '--output-dir', str(out_dir), '--gen-binary', 'Identity']
+    ir_cache_arg = []
+    if ir_cache:
+        ir_cache_arg = ['--ir-cache', ir_cache]
+    pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + \
+        ['--input-binary', binary, '--output-dir', str(out_dir), '--gen-binary', 'Identity']
     out, _ = run_cmd(pear_cmd)
     identity = get_gen_binary_from_pear_output(out)
 
@@ -101,7 +109,8 @@ def test_identity_complex(tmp_path_factory: pytest.TempPathFactory):
 @linux_only
 @docker_installed
 @pytest.mark.slow
-def test_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory):
+def test_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory,
+                                    ir_cache: bool):
     image = "grammatech/ddisasm"
 
     temp_dir = tmp_path_factory.mktemp('gtirb_pprinter_test')
@@ -121,7 +130,10 @@ def test_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory):
 
         # Run PeAR on it
         out_dir = tmp_path_factory.mktemp('out')
-        pear_cmd = ["./PeAR.sh", "--input-binary", str(dest_path), "--output-dir", str(out_dir), "--gen-binary", "Identity"]
+        ir_cache_arg = []
+        if ir_cache:
+            ir_cache_arg = ['--ir-cache', ir_cache]
+        pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + ["--input-binary", str(dest_path), "--output-dir", str(out_dir), "--gen-binary", "Identity"]
         run_cmd(pear_cmd)
 
         # Copy instrumented binary back into the container
@@ -145,7 +157,8 @@ def test_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory):
 
 @linux_only
 @docker_installed
-def test_identity_on_ls(tmp_path_factory: pytest.TempPathFactory):
+def test_identity_on_ls(tmp_path_factory: pytest.TempPathFactory,
+                        ir_cache: bool):
     image = "ubuntu:24.04"
 
     temp_dir = tmp_path_factory.mktemp('ls_test')
@@ -165,7 +178,10 @@ def test_identity_on_ls(tmp_path_factory: pytest.TempPathFactory):
 
         # Run PeAR on it
         out_dir = tmp_path_factory.mktemp('out')
-        pear_cmd = ["./PeAR.sh", "--input-binary", str(dest_path), "--output-dir", str(out_dir), "--gen-binary", "Identity"]
+        ir_cache_arg = []
+        if ir_cache:
+            ir_cache_arg = ['--ir-cache', ir_cache]
+        pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + ["--input-binary", str(dest_path), "--output-dir", str(out_dir), "--gen-binary", "Identity"]
         run_cmd(pear_cmd)
 
         # Copy instrumented binary back into the container
