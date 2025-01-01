@@ -1,7 +1,7 @@
 # PeAR
 
 Add WinAFL instrumentation to x86 and x64 binaries.
-
+Max supported python version: 3.10
 
 ## Run locally
 1. Download `ddisasm` and `gtirb-pprinter` binaries here: https://download.grammatech.com/gtirb/files/windows-release/, and put them on your PATH.
