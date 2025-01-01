@@ -220,6 +220,43 @@ class LinuxUtils(ArchUtils):
                  gen_assembly: Optional[bool]=False,
                  gen_binary: Optional[bool]=False, 
                  obj_link: Optional[list[str]]=None, **kwargs):
+        assert len(ir.modules) == 1, "PeAR only supports one module GTIRB IRs"
+
+        # GCC linker has a super weird behaviour where it blindly converts
+        # legacy .ctors/.dtors sections to new .init_array/.fini_array sections,
+        # despite their different semantics.
+        #   .ctors/.dtors:
+        #     Contains list of pointers terminated by -1. GCC inserts startup
+        #     and teardown code in the binary (within the _init/_fini functions)
+        #     that traverses these lists and executes the functions within them.
+        #   .init_array/.fini_array:
+        #     Contains list of pointers. The dynamic linker executes these
+        #     functions on startup/teardown. The size of this list is baked into
+        #     the ELF file (in a dynamic tag), and it is not terminated by -1.
+        # Upon converting .ctors/.dtors to .init_array/.fini_array, the dynamic
+        # linker reads the -1 as an item in the startup/teardown list and
+        # attempts to call it, causing a segfault. 
+        # To prevent this, we rename the .ctors/.dtors sections to prevent them
+        # from being converted. The _init/_fini functions still operate as
+        # normal and will execute the functions in these renamed sections. 
+        # This is as the .ctor/.dtor sections are not special sections like
+        # .init_array/.fini_array and the data they contain is only referenced
+        # within the binary itself, so they can be renamed with no issues.
+        # Read more:
+        #  - https://maskray.me/blog/2021-11-07-init-ctors-init-array
+        #  - https://github.com/GrammaTech/gtirb-pprinter/issues/17
+        has_ctors_dtors = False
+        for module in ir.modules:
+            for section in module.sections:
+                if '.ctors' in section.name:
+                    has_ctors_dtors = True
+                    section.name = '.old' + section.name
+                if '.dtors' in section.name:
+                    has_ctors_dtors = True
+                    section.name = 'old' + section.name
+        if has_ctors_dtors:
+            log.warning(f'The input binary has a .ctors or .dtors section. This might cause issues during regeneration.')
+
         basename = os.path.basename(output)
         ir_file = os.path.join(working_dir, f'{basename}.gtirb')
 
@@ -253,9 +290,7 @@ class LinuxUtils(ArchUtils):
         exec_stack: bool = False
         stack_size: int = -1
         binary_type: list[str] = []
-        has_ctors_dtors: bool = False
 
-        assert len(ir.modules) == 1, "PeAR only supports one module GTIRB IRs"
         for module in ir.modules:
             # Get data from aux tables
             symbol_to_version_map: dict[Symbol, tuple[int, bool]] # {SYMBOL: (ID, is_hidden)}
@@ -289,18 +324,15 @@ class LinuxUtils(ArchUtils):
 
             # To get non-versioned external symbols we collect all global,
             # non-hidden symbols that aren't versioned.
+            # Ignore special _init and _fini functions
             for sym, (_, _, binding, visibility, _) in elf_symbol_info.items():
-                if binding == 'GLOBAL' and visibility != 'HIDDEN' and sym not in strong_versioned_syms:
+                ignore = ['_init', '_fini']
+                if binding == 'GLOBAL' and visibility != 'HIDDEN' \
+                        and sym not in strong_versioned_syms \
+                        and sym.name not in ignore:
                     nonversioned_syms.append(sym)
 
-            for section in module.sections:
-                if '.ctors' in section.name:
-                    has_ctors_dtors = True
-
         LinuxUtils.check_compiler_exists()
-
-        if has_ctors_dtors:
-            log.warning(f'The input binary has a .ctors or .dtors section. This could cause issues during regeneration, more details and a possible fix here: https://github.com/GrammaTech/gtirb-pprinter/issues/17')
 
         # We need to put unversioned symbol definitions somewhere...
         # We could weaken them, but I don't want to do that, as that would

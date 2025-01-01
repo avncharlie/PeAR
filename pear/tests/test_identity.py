@@ -4,6 +4,8 @@ import shutil
 import pytest
 import importlib
 
+from typing import Callable
+
 import gtirb
 import gtirb_rewriting._auxdata as _auxdata
 
@@ -106,97 +108,87 @@ def test_identity_complex(tmp_path_factory: pytest.TempPathFactory,
     expected_libraries = ['libc.so.6', 'libfoo.so', 'libnothing.so', 'libnothing2.so']
     assert set(libraries) == set(expected_libraries)
 
+def run_docker_test(docker_image: str,
+                    bin_path: str,
+                    call_args: list[str],
+                    check_func: Callable[[bytes], bool],
+                    tmp_path_factory: pytest.TempPathFactory, ir_cache: bool):
+    temp_dir = tmp_path_factory.mktemp('test')
+
+    # Use long running command to keep image alive
+    container_id_cmd = ["docker", "create", "--rm", docker_image, "yes"]
+    output, _ = run_cmd(container_id_cmd)
+    container_id = output.decode().strip()
+    run_cmd(["docker", "start", container_id])
+
+    basename = os.path.basename(bin_path)
+
+    try:
+        # Extract binary from container
+        dest_path = temp_dir / basename
+        run_cmd(["docker", "cp", f"{container_id}:{bin_path}", str(dest_path)])
+
+        # Run PeAR on it
+        out_dir = tmp_path_factory.mktemp('out')
+        ir_cache_arg = ['--ir-cache', ir_cache] if ir_cache else []
+        pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + ["--input-binary", str(dest_path), "--output-dir", str(out_dir), "--gen-binary", "Identity"]
+        run_cmd(pear_cmd)
+
+        # Copy instrumented binary back into the container
+        inst_binary_name = f"{basename}.instrumented.exe"
+        inst_binary_path = out_dir / inst_binary_name
+        run_cmd(["docker", "cp", str(inst_binary_path), f"{container_id}:/"])
+
+        # Run inside container
+        exec_cmd = ["docker", "exec", container_id, f"/{inst_binary_name}"] + call_args
+        exec_output, r = run_cmd(exec_cmd)
+
+        # Check ran without error
+        assert r == 0
+        assert check_func(exec_output)
+
+    finally:
+        # Ensure the container is stopped and removed
+        run_cmd(["docker", "stop", "-t", "1", container_id])
+
 @linux_only
 @docker_installed
-@pytest.mark.slow
 def test_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory,
                                     ir_cache: bool):
-    image = "grammatech/ddisasm"
 
-    temp_dir = tmp_path_factory.mktemp('gtirb_pprinter_test')
-
-    # Use long running command to keep image alive
-    container_id_cmd = ["docker", "create", "--rm", image, "yes"]
-    output, _ = run_cmd(container_id_cmd)
-    container_id = output.decode().strip()
-
-    try:
-        run_cmd(["docker", "start", container_id])
-
-        # Extract binary from container
-        src_path = "/usr/local/bin/gtirb-pprinter"
-        dest_path = temp_dir / "gtirb-pprinter"
-        run_cmd(["docker", "cp", f"{container_id}:{src_path}", str(dest_path)])
-
-        # Run PeAR on it
-        out_dir = tmp_path_factory.mktemp('out')
-        ir_cache_arg = []
-        if ir_cache:
-            ir_cache_arg = ['--ir-cache', ir_cache]
-        pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + ["--input-binary", str(dest_path), "--output-dir", str(out_dir), "--gen-binary", "Identity"]
-        run_cmd(pear_cmd)
-
-        # Copy instrumented binary back into the container
-        instrumented_binary = out_dir / "gtirb-pprinter.instrumented.exe"
-        run_cmd(["docker", "cp", str(instrumented_binary), f"{container_id}:/usr/local/bin/"])
-
-        # Run inside container
-        exec_cmd = ["docker", "exec", container_id, "/usr/local/bin/gtirb-pprinter.instrumented.exe", "--version"]
-        exec_output, r = run_cmd(exec_cmd)
-
-        # Check ran without error, and basic check that version string was printed
-        assert r == 0
-        version_output = exec_output.decode()
-        version = version_output.split()[0]
-        assert len(version.split('.')) == 3
-
-    finally:
-        # Ensure the container is stopped and removed
-        run_cmd(["docker", "stop", "-t", "1", container_id])
-
+    run_docker_test(
+        docker_image="grammatech/ddisasm",
+        bin_path="/usr/local/bin/gtirb-pprinter",
+        call_args = ['--version'],
+        check_func=lambda out: len(out.decode().split()[0].split('.')) == 3,
+        tmp_path_factory=tmp_path_factory,
+        ir_cache=ir_cache
+    )
 
 @linux_only
 @docker_installed
-def test_identity_on_ls(tmp_path_factory: pytest.TempPathFactory,
-                        ir_cache: bool):
-    image = "ubuntu:24.04"
+def test_identity_on_ls(tmp_path_factory: pytest.TempPathFactory, ir_cache:
+                        bool):
+    run_docker_test(
+        docker_image="ubuntu:24.04",
+        bin_path="/bin/ls",
+        call_args = ['--version'],
+        check_func=lambda out: "ls (GNU coreutils)" in out.decode(),
+        tmp_path_factory=tmp_path_factory,
+        ir_cache=ir_cache
+    )
 
-    temp_dir = tmp_path_factory.mktemp('ls_test')
-
-    # Use long running command to keep image alive
-    container_id_cmd = ["docker", "create", "--rm", image, "yes"]
-    output, _ = run_cmd(container_id_cmd)
-    container_id = output.decode().strip()
-
-    try:
-        run_cmd(["docker", "start", container_id])
-
-        # Extract ls binary from container
-        src_path = "/bin/ls"
-        dest_path = temp_dir / "ls"
-        run_cmd(["docker", "cp", f"{container_id}:{src_path}", str(dest_path)])
-
-        # Run PeAR on it
-        out_dir = tmp_path_factory.mktemp('out')
-        ir_cache_arg = []
-        if ir_cache:
-            ir_cache_arg = ['--ir-cache', ir_cache]
-        pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + ["--input-binary", str(dest_path), "--output-dir", str(out_dir), "--gen-binary", "Identity"]
-        run_cmd(pear_cmd)
-
-        # Copy instrumented binary back into the container
-        instrumented_binary = out_dir / "ls.instrumented.exe"
-        run_cmd(["docker", "cp", str(instrumented_binary), f"{container_id}:/usr/local/bin/"])
-
-        # Run inside container
-        exec_cmd = ["docker", "exec", container_id, "/usr/local/bin/ls.instrumented.exe", "--version"]
-        exec_output, r = run_cmd(exec_cmd)
-
-        # Check that it runs
-        assert r == 0
-        version_output = exec_output.decode()
-        assert "ls (GNU coreutils)" in version_output
-
-    finally:
-        # Ensure the container is stopped and removed
-        run_cmd(["docker", "stop", "-t", "1", container_id])
+@linux_only
+@docker_installed
+def test_identity_ctors_dtors(tmp_path_factory: pytest.TempPathFactory,
+                              ir_cache: bool):
+    # The ls binary from Ubuntu 12.04 has a ctors/dtors section, which we test
+    # we can handle correctly
+    run_docker_test(
+        docker_image="ubuntu:12.04",
+        bin_path="/bin/ls",
+        call_args = ['--version'],
+        check_func=lambda out: "ls (GNU coreutils)" in out.decode(),
+        tmp_path_factory=tmp_path_factory,
+        ir_cache=ir_cache
+    )
