@@ -27,7 +27,7 @@ from gtirb_capstone.instructions import GtirbInstructionDecoder
 from ... import DUMMY_LIB_NAME
 from ... import utils
 from ...utils import run_cmd, check_executables_exist
-from ...arch_utils import (WindowsUtils, WindowsX64Utils, WindowsX86Utils)
+from ...arch_utils.windows_utils import (WindowsUtils, WindowsX64Utils, WindowsX86Utils)
 
 from ..rewriter import Rewriter
 
@@ -131,7 +131,7 @@ class AFLPlusPlusRewriter(Rewriter):
         return 'AFL++'
 
     def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
-                 mappings: OrderedDict[int, uuid.UUID]):
+                 mappings: OrderedDict[int, uuid.UUID], dry_run: bool):
         raise NotImplementedError
 
     def generate(self,

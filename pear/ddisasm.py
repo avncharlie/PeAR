@@ -8,7 +8,6 @@ from typing import Optional
 
 from .utils import run_cmd, check_executables_exist
 
-
 log = logging.getLogger(__name__)
 
 def md5(fname: str) -> str:
@@ -25,21 +24,24 @@ def md5(fname: str) -> str:
     return hash_md5.hexdigest()
 
 
-def ddisasm(binary: str, output: str, ir_cache: Optional[str]=None):
+def ddisasm(binary: str, output: str, ir_cache: Optional[str]=None,
+            hide: Optional[bool]=False):
     """
     Generate GTIRB IR of binary using ddisasm. Use cache if specified.
 
     :param binary: File location of input binary
     :param output: File location of output IR
     :param ir_cache: Location of IR cache
+    :param hide: True to hide output
     """
+
     cache_fname = None
     if ir_cache:
         # cache is structured as folder of GTIRB IR files.
-        # the names of these files are the md5 checksums of the binaries they
+        # the names of these files include the md5 checksums of the binaries they
         # were disassembled from.
-
-        cache_fname = f"{md5(binary)}.gtirb"
+        basename = os.path.basename(binary)
+        cache_fname = f"{basename}.{md5(binary)}.gtirb"
         for entry in os.listdir(ir_cache):
             if entry == cache_fname:
                 # found. copy cached IR to output location
@@ -50,7 +52,7 @@ def ddisasm(binary: str, output: str, ir_cache: Optional[str]=None):
     # disassemble binary
     assert check_executables_exist(['ddisasm']), "ddisasm not found"
     cmd = ["ddisasm", binary, "--ir", output]
-    run_cmd(cmd)
+    run_cmd(cmd, should_print=not hide)
 
     assert os.path.isfile(output), "ddisasm failed to produce output IR"
 

@@ -1,7 +1,7 @@
 import os
 import sys
 import time
-import json
+import stat
 import logging
 import pathlib
 import textwrap
@@ -14,10 +14,9 @@ import gtirb
 
 from . import utils
 from .ddisasm import ddisasm
-from . import REWRITERS, REWRITER_MAP
+from . import REWRITERS, REWRITER_MAP, GEN_SCRIPT_OPTS
 from .rewriters.rewriter import Rewriter
-
-#format="%(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)",
+from .arch_utils.linux_utils import fix_arm64_switches
 
 # TODO: remove this color stuff
 green = '\033[92m'
@@ -135,6 +134,14 @@ Hint: running a docker container? Check volume mount location')
             the same binary.
         ''')
     )
+    optional.add_argument(
+        '--gen-build-script', action='store_true', required=False,
+        help=textwrap.dedent('''\
+            Run tool, display commands that would be run without executing
+            them, and create a build script to run on the target system to
+            generate the instrumented binary.
+        ''')
+    )
 
     # Add rewriter subcommands
     rewriter_parsers = parser.add_subparsers(dest='tool',
@@ -144,6 +151,10 @@ Hint: running a docker container? Check volume mount location')
         r.build_parser(rewriter_parsers)
 
     args = parser.parse_args()
+
+    # Set dry run global var
+    if args.gen_build_script:
+        GEN_SCRIPT_OPTS.is_dry_run = True
 
     # Get chosen rewriter class
     args.rewriter = REWRITER_MAP[args.tool]
@@ -160,6 +171,7 @@ def fixup_data_align(ir: gtirb.IR):
     Fix issue breaking data alignment in jump tables by manually setting all
     DataBlock's alignment to four.
     More info here: https://github.com/GrammaTech/gtirb-rewriting/issues/15
+    :param ir: ir to fix
     '''
     module = ir.modules[0]
     alignment = _auxdata.alignment.get_or_insert(module)
@@ -184,24 +196,50 @@ if __name__ == "__main__":
     basename = os.path.basename(args.input_ir)
     if basename.endswith('.gtirb'):
         basename = basename[:-len('.gtirb')]
+    outname = (basename + '.' + args.rewriter.name()).replace('.exe', '')
 
     # load IR and generate mappings
     start_t = time.time()
-    ir = gtirb.IR.load_protobuf(args.input_ir)
+    ir: gtirb.IR = gtirb.IR.load_protobuf(args.input_ir)
     mappings = utils.get_address_to_byteblock_mappings(ir)
     diff = round(time.time()-start_t, 3)
     log.info(f'IR loaded in {diff} seconds')
 
+    # Set build script output file if dry run
+    build_script = ''
+    if args.gen_build_script:
+        build_script = os.path.join(args.output_dir, "build_" + outname)
+        if ir.modules[0].file_format == gtirb.Module.FileFormat.PE:
+            build_script += '.bat'
+        elif ir.modules[0].file_format == gtirb.Module.FileFormat.ELF:
+            build_script += '.sh'
+            with open(build_script, 'w') as f:
+                f.write('#!/bin/bash\nset -x\n')
+            # make executable
+            st = os.stat(build_script)
+            os.chmod(build_script, st.st_mode | stat.S_IEXEC)
+        GEN_SCRIPT_OPTS.gen_output = build_script
+
     # fix gtirb issue that breaks data alignment
     # fixup_data_align(ir)
 
+    # pre-process ARM64 binaries to fix switch identification
+    switches = None
+    if ir.modules[0].file_format == gtirb.Module.FileFormat.ELF \
+            and ir.modules[0].isa == gtirb.Module.ISA.ARM64:
+        switches = fix_arm64_switches(ir)
+
     # Run chosen rewriter
-    rewriter: Rewriter = args.rewriter(ir, args, mappings)
+    rewriter: Rewriter = args.rewriter(ir, args, mappings, args.gen_build_script)
     instrumented_ir = rewriter.rewrite()
 
     # Save instrumented IR to file and generate assembly or binary if needed
     if args.gen_asm or args.gen_binary:
-        output_basename= f'{os.path.join(args.output_dir, basename)}.instrumented'.replace('.exe', '')
+        output_basename= os.path.join(args.output_dir, outname)
         rewriter.generate(output_basename, args.output_dir,
                           gen_assembly=args.gen_asm,
-                          gen_binary=args.gen_binary)
+                          gen_binary=args.gen_binary,
+                          switch_data=switches)
+
+    if args.gen_build_script:
+        log.info(f"Build script saved to: {build_script}")

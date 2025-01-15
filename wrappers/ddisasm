@@ -3,8 +3,11 @@
 # runs ddisasm via docker
 # assumes command format: ddisasm INPUT_FILE OPTION OUTPUT_FILE
 
+USER_ID=$(id -u)
+GROUP_ID=$(id -g)
+
 if [ "$#" -ne 3 ]; then
-    docker run --rm -it -v "$(pwd)":/workspace grammatech/ddisasm ddisasm "$@"
+    docker run --rm -it --user "$USER_ID:$GROUP_ID" -v "$(pwd)":/workspace grammatech/ddisasm ddisasm "$@"
     exit
 fi
 
@@ -16,4 +19,5 @@ output_full_path=$(realpath "$3")
 output_basedir=$(dirname "$output_full_path")
 output_basename=$(basename "$output_full_path")
 
-docker run --rm -it -v "$input_basedir":/input -v "$output_basedir":/output grammatech/ddisasm ddisasm input/"$input_basename" "$2" output/"$output_basename"
+docker run --rm -it --user "$USER_ID:$GROUP_ID" -v "$input_basedir":/input -v "$output_basedir":/output grammatech/ddisasm ddisasm input/"$input_basename" "$2" output/"$output_basename"
+

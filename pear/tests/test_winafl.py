@@ -17,7 +17,7 @@ from typing import NamedTuple
 from ..utils import run_cmd, check_executables_exist
 from .conftest import windows_only, get_gen_binary_from_pear_output
 
-TEST_PROG_DIR = importlib.resources.files(__package__) / 'test_programs'
+TEST_PROG_DIR = importlib.resources.files(__package__) / 'test_winafl'
 WINAFL_TIMEOUT=30
 GENERIC_TARGET_FUNC_NAME='read_and_test_file'
 
@@ -86,7 +86,7 @@ def get_exported_func_address(prog_path: str, devcmd_bat: str,
     # first get exported function relative address
     dumpbin_exports = f'dumpbin /exports {prog_path}'
     cmd = ['cmd', '/c', f'{devcmd_bat} & {dumpbin_exports}']
-    out, _ = run_cmd(cmd, print=False)
+    out, _ = run_cmd(cmd, should_print=False)
     out = out.decode()
     target_func_offset = None
     for line in out.splitlines():
@@ -97,7 +97,7 @@ def get_exported_func_address(prog_path: str, devcmd_bat: str,
     # next get image base
     dumpbin_headers = f'dumpbin /headers {prog_path}'
     cmd = ['cmd', '/c', f'{devcmd_bat} & {dumpbin_headers}']
-    out, _ = run_cmd(cmd, print=False)
+    out, _ = run_cmd(cmd, should_print=False)
     out = out.decode()
     image_base = None
     for line in out.splitlines():
@@ -249,6 +249,8 @@ def test_winafl_rewriter(
         winafl_loc = winafl_32_loc
     elif arch == gtirb.Module.ISA.X64:
         winafl_loc = winafl_64_loc
+    else:
+        assert False, f'unsupported ISA "{arch}"'
 
     # Use pear to instrument test program
     out_dir = tmp_path_factory.mktemp('out')

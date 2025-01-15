@@ -13,7 +13,9 @@ import gtirb_rewriting._auxdata as _auxdata
 
 from .rewriter import Rewriter
 from ..utils import run_cmd
-from ..arch_utils import ArchUtils, WindowsUtils, WindowsX64Utils, WindowsX86Utils, LinuxUtils
+from ..arch_utils.arch_utils import ArchUtils
+from ..arch_utils.windows_utils import WindowsUtils, WindowsX64Utils, WindowsX86Utils
+from ..arch_utils.linux_utils import LinuxUtils
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ class RegenerateRewriter(Rewriter):
         return 'Regenerate'
 
     def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
-                 mappings: OrderedDict[int, uuid.UUID]):
+                 mappings: OrderedDict[int, uuid.UUID], dry_run: bool):
         self.ir = ir
         self.link: list[str] = args.link
         self.asm: str = args.from_asm

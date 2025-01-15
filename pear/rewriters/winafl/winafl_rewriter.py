@@ -26,7 +26,7 @@ from gtirb_capstone.instructions import GtirbInstructionDecoder
 from ... import DUMMY_LIB_NAME
 from ... import utils
 from ...utils import run_cmd, check_executables_exist
-from ...arch_utils import (WindowsUtils, WindowsX64Utils, WindowsX86Utils)
+from ...arch_utils.windows_utils import WindowsUtils, WindowsX64Utils, WindowsX86Utils
 
 from ..rewriter import Rewriter
 
@@ -81,13 +81,13 @@ class WinAFLRewriter(Rewriter):
         return 'WinAFL'
 
     def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
-                 mappings: OrderedDict[int, uuid.UUID]):
+                 mappings: OrderedDict[int, uuid.UUID], dry_run: bool):
         self.ir = ir
         self.target_func: int = args.target_func
         self.mappings = mappings
 
         # convert relative library paths to absolute paths
-        self.extra_link: list[str] | None = args.extra_link_libs
+        self.extra_link = args.extra_link_libs
         link = []
         if self.extra_link != None:
             for l in self.extra_link:
@@ -96,7 +96,7 @@ class WinAFLRewriter(Rewriter):
                     link.append(str(p.resolve()))
                 else:
                     link.append(l)
-        self.extra_link = link
+        self.extra_link: list[str] = link
         self.is_64bit = ir.modules[0].isa == gtirb.Module.ISA.X64
 
         # convert ignorelist to hex addresses

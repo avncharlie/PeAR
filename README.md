@@ -40,3 +40,13 @@ Windows Defender could prevent the tests from running correctly. To temporarily
 disable it while running tests, open the Windows Security app -> Virus and
 threat protection -> 'Manage settings' under Virus and threat protection
 settings -> turn off 'Real-time protection'.
+
+## Trace 
+
+x64:
+- DynamoRIO drcov slowdown: ~80x slowdown
+- PeAR fast trace slowdown: ~10x slowdown
+
+ARM64:
+- DynamoRIO drcov slowdown: ~40x slowdown
+- PeAR fast trace slowdown: ~20x slowdown
