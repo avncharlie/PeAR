@@ -24,7 +24,7 @@ from gtirb_capstone.instructions import GtirbInstructionDecoder
 
 from .rewriter import Rewriter
 from ..utils import run_cmd
-from ..arch_utils import WindowsUtils
+from ..arch_utils.windows_utils import WindowsUtils
 
 log = logging.getLogger(__name__)
 

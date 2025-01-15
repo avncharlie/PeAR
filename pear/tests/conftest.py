@@ -64,5 +64,5 @@ def get_gen_binary_from_pear_output(output: bytes) -> str:
     for l in out.splitlines():
         if gen_binary_line in l:
             inst_prog = l.split(gen_binary_line)[-1] # get instrumented filename
-            inst_prog = inst_prog[:-4] # remove color unicode characters at end
+            inst_prog = inst_prog[:-4] # remove color ansi characters at end
     return inst_prog

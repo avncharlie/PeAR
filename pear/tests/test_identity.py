@@ -132,11 +132,11 @@ def run_docker_test(docker_image: str,
         out_dir = tmp_path_factory.mktemp('out')
         ir_cache_arg = ['--ir-cache', ir_cache] if ir_cache else []
         pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + ["--input-binary", str(dest_path), "--output-dir", str(out_dir), "--gen-binary", "Identity"]
-        run_cmd(pear_cmd)
+        out, _ = run_cmd(pear_cmd)
 
         # Copy instrumented binary back into the container
-        inst_binary_name = f"{basename}.instrumented.exe"
-        inst_binary_path = out_dir / inst_binary_name
+        inst_binary_path = get_gen_binary_from_pear_output(out)
+        inst_binary_name = os.path.basename(inst_binary_path)
         run_cmd(["docker", "cp", str(inst_binary_path), f"{container_id}:/"])
 
         # Run inside container

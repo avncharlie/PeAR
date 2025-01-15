@@ -33,7 +33,7 @@ def test_regenerate(tmp_path_factory: pytest.TempPathFactory,
     pear_cmd = [sys.executable, '-m', 'pear'] + ir_cache_arg + \
         ['--input-binary', bin_path, '--output-dir', str(out_dir), '--gen-asm', 'Identity']
     out, _ = run_cmd(pear_cmd)
-    asm_path = os.path.join(out_dir, progname + '.instrumented.S')
+    asm_path = os.path.join(out_dir, progname + '.Identity.S')
 
     fixed = ''
     with open(asm_path, 'r') as f:

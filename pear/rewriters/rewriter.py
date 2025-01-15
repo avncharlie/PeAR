@@ -6,7 +6,8 @@ from collections import OrderedDict
 from typing import Optional
 
 import gtirb
-from ..arch_utils import ArchUtils
+from ..arch_utils.arch_utils import ArchUtils
+from ..arch_utils.linux_utils import SwitchData
 
 log = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class Rewriter:
     The 'name' and 'build_parser' methods setup argument parsing for the IR.
     """
     def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
-                 mappings: OrderedDict[int, uuid.UUID]):
+                 mappings: OrderedDict[int, uuid.UUID], dry_run: bool):
         """
         Create a rewriter.
 
@@ -26,6 +27,8 @@ class Rewriter:
         :param args: Parsed arguments for rewriter. Parser built using
             build_parser class method.
         :param mappings: Codeblocks to address mappings in original IR
+        :param dry_run: Whether this is a dry run to generate a build script or
+            not
         """
         raise NotImplementedError
     
@@ -41,6 +44,7 @@ class Rewriter:
                  output: str, working_dir: str, *args,
                  gen_assembly: Optional[bool]=False,
                  gen_binary: Optional[bool]=False,
+                 switch_data: Optional[list[SwitchData]]=None,
                  **kwargs):
         """
         Generate binary or assembly from instrumented IR.
@@ -52,6 +56,7 @@ class Rewriter:
             files
         :param gen_assembly: True if generating assembly
         :param gen_binary: True if generating binary
+        :param switch_data: Switch data for ARM64 binaries
         """
         raise NotImplementedError
 

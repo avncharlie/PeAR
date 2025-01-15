@@ -12,7 +12,9 @@ import gtirb_rewriting._auxdata as _auxdata
 
 from .rewriter import Rewriter
 from ..utils import run_cmd
-from ..arch_utils import ArchUtils, WindowsUtils, WindowsX64Utils, WindowsX86Utils, LinuxUtils
+from ..arch_utils.arch_utils import ArchUtils
+from ..arch_utils.windows_utils import WindowsUtils, WindowsX64Utils, WindowsX86Utils
+from ..arch_utils.linux_utils import LinuxUtils, SwitchData
 
 log = logging.getLogger(__name__)
 
@@ -42,12 +44,13 @@ be possible."""
         return 'Identity'
 
     def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
-                 mappings: OrderedDict[int, uuid.UUID]):
+                 mappings: OrderedDict[int, uuid.UUID], dry_run: bool):
         self.ir = ir
         self.link: list[str] = args.link
         self.is_64bit = ir.modules[0].isa == gtirb.Module.ISA.X64
         self.is_windows = ir.modules[0].file_format == gtirb.Module.FileFormat.PE
         self.is_linux = ir.modules[0].file_format == gtirb.Module.FileFormat.ELF
+        self.dry_run = dry_run
 
         # convert relative library paths to absolute paths
         link = []
@@ -74,6 +77,7 @@ be possible."""
     def generate(self, output: str, working_dir: str, *args,
                  gen_assembly: Optional[bool]=False,
                  gen_binary: Optional[bool]=False,
+                 switch_data: Optional[list[SwitchData]]=None,
                  **kwargs):
         if self.is_windows:
             WindowsUtils.generate(output, working_dir, self.ir,
@@ -82,7 +86,8 @@ be possible."""
         elif self.is_linux:
             LinuxUtils.generate(output, working_dir, self.ir,
                                gen_assembly=gen_assembly,
-                               gen_binary=gen_binary, obj_link=self.link)
+                               gen_binary=gen_binary,obj_link=self.link,
+                               switch_data=switch_data)
         else:
             ArchUtils.generate(output, working_dir, self.ir,
                                gen_assembly=gen_assembly,

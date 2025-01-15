@@ -11,6 +11,10 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 
 import gtirb
+import gtirb_rewriting._auxdata as _auxdata
+
+from gtirb import Module
+from gtirb.symbol import Symbol
 import gtirb_functions
 from gtirb_rewriting import (
     Patch,
@@ -19,9 +23,45 @@ from gtirb_rewriting import (
 
 log = logging.getLogger(__name__)
 
+from . import GEN_SCRIPT_OPTS
+DRY_RUN_WHITELIST = ['ddisasm', 'gtirb-pprinter']
+
+def log_cmd(cmd: list[str],
+            working_dir: Optional[str]=None,
+            env_vars: Optional[dict]=None):
+    """Log command to be run and add to build script if needed"""
+    # TODO: remove colours
+    green = '\033[92m'
+    end = '\033[0m'
+    cmd_str = ' '.join(cmd)
+    fmt_cmd = green +  cmd_str + end
+    wd = ''
+    env = ''
+    if working_dir:
+        wd = f" (with custom working dir '{working_dir}') "
+    if env_vars:
+        env = f" (with env vars '{env_vars}') "
+    extra = wd + env
+    if extra != '':
+        extra = extra[:-1]
+
+    executing = 'Executing'
+    # write to build script
+    if GEN_SCRIPT_OPTS.is_dry_run and cmd[0] not in DRY_RUN_WHITELIST:
+        executing = 'Would execute'
+        assert GEN_SCRIPT_OPTS.gen_output != None
+        with open(GEN_SCRIPT_OPTS.gen_output, 'a') as f:
+            assert not env_vars, "setting env vars in build script not implemented"
+            if working_dir:
+                cmd_str = f'pushd {working_dir}\n{cmd_str}\npopd'
+            cmd_str += '\n'
+            f.write(cmd_str)
+            
+    log.info(f"{executing}{extra}: " + fmt_cmd)
+
 def run_cmd(cmd: list[str],
             check: Optional[bool]=True,
-            print: Optional[bool]=True,
+            should_print: Optional[bool]=True,
             working_dir: Optional[str]=None,
             env_vars: Optional[dict]=None) -> tuple[bytes, int]:
     """
@@ -36,11 +76,9 @@ def run_cmd(cmd: list[str],
     :param env_vars: A dictionary of environment variables to set for the command.
     :returns: A tuple of (command output, return code)
     """
-    # TODO: remove colours
-    green = '\033[92m'
-    blue = '\033[94m'
-    end = '\033[0m'
-    log.info("Executing: " + green +  " ".join(cmd) + end)
+    log_cmd(cmd, working_dir, env_vars)
+    if GEN_SCRIPT_OPTS.is_dry_run and cmd[0] not in DRY_RUN_WHITELIST:
+        return b'', 0
     output = b""
 
     env = dict(os.environ)
@@ -51,7 +89,7 @@ def run_cmd(cmd: list[str],
                                stderr=subprocess.STDOUT,
                                cwd=working_dir, env=env)
     for c in iter(lambda: process.stdout.read(1), b""):
-        if print:
+        if should_print:
             sys.stdout.buffer.write(c)
             sys.stdout.buffer.flush()
         output += c
@@ -138,6 +176,32 @@ def insert_patch_at_address(patch_address: int, patch: Patch,
         patch
     )
 
+def align_section(module: Module, section: str, balign: Optional[int]=16):
+    '''
+    Align the original program data in a section.
+    gtirb-rewriting inserts patch data before all other data in the section it
+    is inserted into. This can cause a bunch of alignment issues. To fix this,
+    we add alignment to the start of the original data.
+    :param module: GTIRB Module we are working
+    :param section: Section to align
+    :param balign: Bytes of alignment needed
+    '''
+
+    alignment = _auxdata.alignment.get_or_insert(module)
+    sec = None
+    for s in module.sections:
+        if s.name == section:
+            sec = s
+    assert sec != None, f"Cannot find section {section}"
+
+    in_prog_dbs = [db for db in sec.data_blocks if db.address is not None]
+    sorted_db = sorted(in_prog_dbs, key=lambda e: e.address)
+
+    # Inserted patch data doesn't have an address so it won't be within sorted_dbs
+    if len(sorted_db) > 0:
+        alignment[sorted_db[0]] = balign
+
+
 def get_basic_blocks(function: gtirb_functions.Function) -> list[list[gtirb.CodeBlock]]:
     """
     Return basic blocks within a function (GTIRB CodeBlocks are the same as what
@@ -217,58 +281,3 @@ def get_basic_blocks(function: gtirb_functions.Function) -> list[list[gtirb.Code
         blocks.append([block])
 
     return blocks
-
-# Architecture specific utility function
-class ArchUtils(ABC):
-    @abstractmethod
-    def backup_registers(label: str):
-        '''
-        Generate asm for backing up registers to given label
-        :param label: label to backup registers to
-        '''
-        pass
-
-
-def backup_regs_x86(label: str):
-    '''
-    Generate asm for backing up x86 registers to given label
-    :param label: label to backup registers to
-    '''
-    return f'''
-        mov    DWORD PTR [{label}], eax
-        mov    DWORD PTR [{label} + 0x4], ebx
-        mov    DWORD PTR [{label} + 0x8], ecx
-        mov    DWORD PTR [{label} + 0xC], edx
-        mov    DWORD PTR [{label} + 0x10], edi
-        mov    DWORD PTR [{label} + 0x14], esi
-        movaps XMMWORD PTR [{label} + 0x20], xmm0
-        movaps XMMWORD PTR [{label} + 0x30], xmm1
-        movaps XMMWORD PTR [{label} + 0x40], xmm2
-        movaps XMMWORD PTR [{label} + 0x50], xmm3
-        movaps XMMWORD PTR [{label} + 0x60], xmm4
-        movaps XMMWORD PTR [{label} + 0x70], xmm5
-        movaps XMMWORD PTR [{label} + 0x80], xmm6
-        movaps XMMWORD PTR [{label} + 0x90], xmm7
-    '''
-
-def restore_regs_x86(label: str):
-    '''
-    Generate asm for restoring x86 registers from a given label
-    :param label: label to restore registers from
-    '''
-    return f'''
-        mov    eax,  DWORD PTR [{label}]
-        mov    ebx,  DWORD PTR [{label} + 0x4]
-        mov    ecx,  DWORD PTR [{label} + 0x8]
-        mov    edx,  DWORD PTR [{label} + 0xC]
-        mov    edi,  DWORD PTR [{label} + 0x10]
-        mov    esi,  DWORD PTR [{label} + 0x14]
-        movaps xmm0, XMMWORD PTR [{label} + 0x20]
-        movaps xmm1, XMMWORD PTR [{label} + 0x30]
-        movaps xmm2, XMMWORD PTR [{label} + 0x40]
-        movaps xmm3, XMMWORD PTR [{label} + 0x50]
-        movaps xmm4, XMMWORD PTR [{label} + 0x60]
-        movaps xmm5, XMMWORD PTR [{label} + 0x70]
-        movaps xmm6, XMMWORD PTR [{label} + 0x80]
-        movaps xmm7, XMMWORD PTR [{label} + 0x90]
-    '''
