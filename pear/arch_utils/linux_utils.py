@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import gtirb
 import random
@@ -6,14 +7,12 @@ import string
 import logging
 from typing import Optional, Union
 
-
-from gtirb import Symbol, ProxyBlock, CodeBlock
+from gtirb import Symbol, CodeBlock
 from gtirb.block import DataBlock
-from gtirb.byteinterval import ByteInterval
 from gtirb.cfg import Edge
 from gtirb.module import Module
 from gtirb.offset import Offset
-from gtirb.symbolicexpression import SymAddrConst, SymbolicExpression, SymAddrAddr
+from gtirb.symbolicexpression import SymAddrConst, SymAddrAddr, SymbolicExpression
 import gtirb_rewriting._auxdata as _auxdata
 from gtirb_capstone.instructions import GtirbInstructionDecoder
 import gtirb_rewriting._auxdata as _auxdata
@@ -21,6 +20,7 @@ import gtirb_rewriting._auxdata as _auxdata
 from .arch_utils import ArchUtils
 from ..utils import run_cmd, check_executables_exist
 from .. import DUMMY_LIB_NAME
+from ..instruction_finder import find_asm_pattern, split_asm
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ class SwitchData:
     jt_load_instr_addr: int
     jt: DataBlock
     cases_start: CodeBlock
+    matched_instructions: list[str]
     jt_label: str = ''
     cases_start_label: str = ''
 
@@ -513,91 +514,88 @@ def get_switch_start(module: Module, start: int, end: int) -> Union[CodeBlock, N
 
 def find_switches(module: gtirb.Module) -> list[SwitchData]:
     '''
-    Identify switches.
+    Identify switches (very basic).
     Assumes no instrumentation has been applied!
 
     ID switches by:
-        # load jump table
-        adrp <reg>, <jump_table>
-        add <reg>,<reg> :lo12:<jump_table>
-
-        ... instructions that don't use <reg> ...
-
-        # index into jump table
-        ldrb/ldrh/ldr <reg2>,[<reg>,<reg2>,uxtw/uxtw #1/uxtw/#2]
-        # add to base code address
-        adr <reg3>, <code_base>
-        add <reg4>, <reg3>, <reg2>, sxtw #2
+        adrp <r1>, <jump_table>
+        add <r1>, <r1>, :lo12:<jump_table>
+        ldr* <r2>, [<r1>, *, uxtw*]
+        adr <r3>, <code_base>
+        add *, <r3>, <r2>, sxtw *
 
     :param module: Module to fix
     :returns: list of (Switch location, jump table location)
     '''
     decoder = GtirbInstructionDecoder(module.isa)
 
-    switches: list[SwitchData] = []
+    asm = []
+    ins_index: list[tuple[CodeBlock, int]] = []
     for cb in sorted(module.code_blocks, key=lambda e: e.address): # type: ignore
         cb: CodeBlock
         insns = list(decoder.get_instructions(cb))
-        i = 0
-        while i < len(insns) - 4:
-            i1, op1, arg1 = insns[i], insns[i].insn_name(), insns[i].op_str
-            i2, op2, arg2 = insns[i+1], insns[i+1].insn_name(), insns[i+1].op_str
+        for i in insns:
+            insns_str = f'{i.insn_name()} {i.op_str}'
+            # Symbolise a few known instructions (TODO: add branches)
+            if i.insn_name() in ['adrp', 'adr', 'add']:
+                r = list(module.symbolic_expressions_at(range(i.address, i.address + i.size)))
+                if len(r) > 0:
+                    label = r[0][2].symbol.name
+                    if SymbolicExpression.Attribute.LO12 in r[0][2].attributes:
+                        label = ":lo12:" + label
+                    # Replace literal with symbol
+                    insns_str = re.sub(r'#\S+', label, insns_str)
+            asm.append(insns_str)
+            ins_index.append((cb, i.address))
 
-            if op1 == 'adrp' and op2 == 'add':
-                jt_reg = arg1.split(',')[0]
+    matches = find_asm_pattern(asm, [
+        "adrp <r1>, <jump_table>", 
+        "add <r1>, <r1>, :lo12:<jump_table>", 
+        "ldr* <r2>, [<r1>, *, uxtw*]", 
+        "adr <r3>, <code_base>", 
+        "add *, <r3>, <r2>, sxtw *", 
+    ])
 
-                # Get potential jump table
-                ret = get_loaded_addr(module, i1.address, i2.address+i2.size)
-                if ret == None:
-                    i += 1
-                    continue
-                db, jt_label = ret
+    switches: list[SwitchData] = []
 
-                # Now find rest of switch
-                found = False
-                ii = i+2
-                ss: Union[CodeBlock, None] = None
-                entry_size = -1
-                load = -1
-                while ii < len(insns) - 2:
-                    i3, op3, arg3 = insns[ii], insns[ii].insn_name(), insns[ii].op_str
-                    i4, op4, arg4 = insns[ii+1], insns[ii+1].insn_name(), insns[ii+1].op_str
-                    i5, op5, arg5 = insns[ii+2], insns[ii+2].insn_name(), insns[ii+2].op_str
+    # create SwitchData for each match
+    for match in matches:
+        jt_entry_size = -1
+        jt_load_instr_addr = -1
+        jt = None
+        cases_start = None
+        matched_instructions = []
+        jt_label = '' 
+        cases_start_label = ''
 
-                    if op3 in ['ldrb', 'ldrh', 'ldr'] \
-                            and op4 == 'adr' and op5 == 'add' \
-                            and f'[{jt_reg}' in arg3:
-                        ss = get_switch_start(module, i3.address, i5.address + i5.size)
-                        if ss == None:
-                            continue
-                        load = i3.address
-                        if op3 == 'ldr':
-                            entry_size = 4
-                        elif op3 == 'ldrh':
-                            entry_size = 2
-                        elif op3 == 'ldrb':
-                            entry_size = 1
-                        found = True
-                        break
-                    elif jt_reg in arg3: 
-                        # We assume that if register holding the jump table
-                        # isn't used by jump table loading instruction, we found
-                        # a false positive
-                        found = False
-                        break
-                    ii += 1
+        for i in match:
+            matched_instructions.append(asm[i])
 
-                if not found or ss == None:
-                    i += 1
-                    continue
+        # Get load size based on load instruction
+        load = (asm[match[2]]).split(' ')[0]
+        if load == 'ldr':
+            jt_entry_size = 4
+        elif load == 'ldrh':
+            jt_entry_size = 2
+        elif load == 'ldrb':
+            jt_entry_size = 1
 
-                sd = SwitchData(jt_entry_size=entry_size,
-                                jt_load_instr_addr=load,
-                                jt=db,
-                                jt_label=jt_label,
-                                cases_start=ss)
-                switches.append(sd)
-            i += 1
+        load_cb, load_addr = ins_index[match[2]]
+        jt_load_instr_addr = load_addr
+
+        jt_label = ((asm[match[0]]).split(',')[-1]).strip()
+        jt = next(module.symbols_named(jt_label))._payload
+
+        cases_start_label = ((asm[match[3]]).split(',')[-1]).strip()
+        cases_start = next(module.symbols_named(cases_start_label))._payload
+        switches.append(SwitchData(
+                        jt_entry_size=jt_entry_size,
+                        jt_load_instr_addr=jt_load_instr_addr,
+                        jt=jt,
+                        cases_start=cases_start,
+                        matched_instructions=matched_instructions,
+                        jt_label=jt_label,
+                        cases_start_label=cases_start_label))
     return switches
 
 def get_instructions(cb: CodeBlock):
@@ -612,7 +610,9 @@ def fix_arm64_switches(ir: gtirb.IR) -> list[SwitchData]:
     '''
     Find switches and ensure that their jump tables are constructed correctly.
     Assumes no instrumentation has been applied!
-    Assumes that the incorrect switch jump table is just one big datablock
+    Assumes that the incorrect switch jump table is just one big datablock (or
+    consecutive DataBlocks)
+
     :param ir: IR to fix
     :returns: Switch information
     '''
@@ -721,12 +721,32 @@ def fix_arm64_switches(ir: gtirb.IR) -> list[SwitchData]:
         if fixed:
             corrected += 1
 
-    if corrected > 2:
+    if corrected > 1:
         log.info(f"Corrected {corrected} jump tables.")
     if corrected == 1:
         log.info(f"Corrected 1 jump table.")
 
     return switches
+
+def find_asm_subsequence(sequence: list[str], sub: list[str]) -> list[int]:
+    '''
+    Find first asm subsequence and return list of indices matched
+    
+    :param sequence: List of asm to look through
+    :param sub: Subsequence to find
+    :returns: list of matched indices
+    '''
+    indices = []
+    j = 0
+
+    for i, element in enumerate(sequence):
+        if split_asm(element) == split_asm(sub[j]):
+            indices.append(i)
+            j += 1
+        if j == len(sub):
+            break
+
+    return indices if j == len(sub) else []
 
 
 def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
@@ -746,71 +766,55 @@ def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
     :param asm_f: Assembly file to modify.
     :param switches: Information about the switches within the assembly
     '''
-    # Map between jump table label and switch info
-    switch_map: dict[str, SwitchData] = {}
-    for s in switches:
-        switch_map[s.jt_label] = s
 
     asm = []
+    strip_asm = []
     with open(asm_f) as f:
-        asm = f.readlines()
+        for l in f:
+            strip_asm.append(l.strip())
+            asm.append(l)
 
+    # First upgrade LDR instructions. 
+    # This could be more efficient, as we we traverse the asm len(switches)
+    # times to find the LDR instructions, when we could maybe just traverse it
+    # once
     num_expanded = 0
+    for switch in switches:
+        # Skip if jump table entries already 4 bytes
+        if switch.jt_entry_size == 4:
+            continue
+
+        # Find and upgrade switch instructions
+        match = find_asm_subsequence(strip_asm, switch.matched_instructions)
+        if len(match) == 0:
+            log.warning(f"Could not find ldr instruction for switch {switch.jt_label} to expand!")
+            continue
+
+        # Upgrade ldr to 4 byte load
+        ldr = ''
+        shift = ''
+        if switch.jt_entry_size == 1:
+            ldr = 'ldrb'
+            shift = 'uxtw'
+        elif switch.jt_entry_size == 2:
+            ldr = 'ldrh'
+            shift = 'uxtw #1'
+        ldr_index = match[2]
+        asm[ldr_index] = asm[ldr_index].replace(ldr, 'ldr').replace(shift, 'uxtw #2')
+        num_expanded += 1
+
+    # Now upgrade jump table entries (in one run)
+    switch_map = {}
+    for switch in switches:
+        switch_map[switch.jt_label] = switch
+
+    # Find jump table entries and upgrade them
+    num_jump_tables_expanded = 0
     i = 0
-    while i < len(asm) - 4:
-        first = asm[i].strip()
-        second = asm[i+1].strip()
-        reg = ''
-        switch = None
-
-        # Check for jump table load (adrp r, <label>; add r,r :lo12:<label>)
-        # And upgrade to 4 byte load if needed
-        if first.startswith('adrp '):
-            reg = first.split()[1][:-1]
-            label = first.split()[-1]
-            if second != f'add {reg},{reg}, :lo12:{label}':
-                i += 1
-                continue
-            # Try and find corresponding switch
-            if label in switch_map:
-                switch = switch_map[label]
-            else:
-                i += 1
-                continue
-
-            # Find rest of switch
-            ldr = ''
-            shift = ''
-            if switch.jt_entry_size == 1:
-                ldr = 'ldrb'
-                shift = 'uxtw'
-            elif switch.jt_entry_size == 2:
-                ldr = 'ldrh'
-                shift = 'uxtw #1'
-            else:
-                # switch already has 4 byte jt entries
-                i += 1
-                continue
-
-            ii = i+2
-            while ii < len(asm) - 2:
-                third = asm[ii].strip()
-                fourth = asm[ii+1].strip()
-                fifth = asm[ii+2].strip()
-
-                # Looking for jump table entry load
-                # (ldr w,[reg,case,shift]; adr r,<cases>; add x, r, w, sxtw #2)
-                if third.startswith(ldr+' ') and f'[{reg}' in third and f'{shift}]' in third \
-                        and fourth.startswith('adr ') and fourth.endswith(switch.cases_start_label) \
-                        and fifth.startswith('add '):
-                   # Upgrade to 4 byte load
-                   asm[ii] = asm[ii].replace(ldr, 'ldr').replace(shift, 'uxtw #2')
-                   break
-                ii += 1
-
-        # Check for jump table, and expand if necessary
-        if first[:-1] in switch_map:
-            switch = switch_map[first[:-1]]
+    while i < len(asm):
+        x = asm[i]
+        if x.strip()[:-1] in switch_map:
+            switch = switch_map[x.strip()[:-1]]
             curr = ''
             if switch.jt_entry_size == 1:
                 curr = '.byte'
@@ -821,8 +825,8 @@ def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
                 continue
 
             i += 1
-            while i < len(asm):
-                entry = asm[i].strip()
+            while i < len(strip_asm):
+                entry = strip_asm[i]
                 if entry.startswith(curr):
                     asm[i] = asm[i].replace(curr, '.long')
                 elif entry.startswith('.L_') or entry.startswith("#="):
@@ -833,10 +837,13 @@ def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
                     i -= 1
                     break
                 i += 1
-            num_expanded += 1
+            num_jump_tables_expanded += 1
         i += 1
 
-    if num_expanded > 2:
+    if num_expanded != num_jump_tables_expanded:
+        log.warning(f"Expanded {num_expanded} ldr instructions and {num_jump_tables_expanded} jump tables ... these numbers should be equal")
+
+    if num_expanded > 1:
         log.info(f"Expanded {num_expanded} jump tables.")
     if num_expanded == 1:
         log.info(f"Expanded 1 jump table.")
@@ -845,4 +852,3 @@ def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
     with open(asm_f, 'w') as f:
         for l in asm:
             f.write(l)
-
