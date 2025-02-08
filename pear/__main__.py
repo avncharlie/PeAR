@@ -2,17 +2,20 @@ import os
 import sys
 import time
 import stat
+import json
 import logging
 import pathlib
 import textwrap
 import argparse
+from types import CodeType
+from gtirb.block import CodeBlock
 import gtirb_rewriting._auxdata as _auxdata
 
 from collections import OrderedDict
 
 import gtirb
 
-from . import utils
+from .utils import is_pie, get_address_to_byteblock_mappings
 from .ddisasm import ddisasm
 from . import REWRITERS, REWRITER_MAP, GEN_SCRIPT_OPTS
 from .rewriters.rewriter import Rewriter
@@ -135,6 +138,14 @@ Hint: running a docker container? Check volume mount location')
         ''')
     )
     optional.add_argument(
+        '--func-names', required=False, type=path_exists,
+        help=textwrap.dedent('''\
+            Json files with object mapping address to function. Use Ghidra
+            script pear/tools/ghidra_get_function_names.py to generate.
+            schema: {'func_map': {<addr>: <name>}, 'base_addr': <load_addr>}
+        ''')
+    )
+    optional.add_argument(
         '--gen-build-script', action='store_true', required=False,
         help=textwrap.dedent('''\
             Run tool, display commands that would be run without executing
@@ -166,7 +177,7 @@ Hint: running a docker container? Check volume mount location')
 
     return args
 
-def fixup_data_align(ir: gtirb.IR):
+def preprocess_fixp_data_align(ir: gtirb.IR):
     '''
     Fix issue breaking data alignment in jump tables by manually setting all
     DataBlock's alignment to four.
@@ -177,6 +188,31 @@ def fixup_data_align(ir: gtirb.IR):
     alignment = _auxdata.alignment.get_or_insert(module)
     for db in module.data_blocks:
         alignment[db] = 1
+
+def preprocess_add_function_names(ir: gtirb.IR, func_names: str):
+    # Make sure func mappings are typed correctly
+    # And subtract base address from func if PIE
+    fn: dict[int, str] = {}
+    with open(func_names) as f:
+        _funcmap = json.load(f)
+        b_addr = _funcmap['base_addr']
+        b_addr = int(b_addr, 16) if b_addr.startswith('0x') else int(b_addr)
+        for addr, name in _funcmap['func_map'].items():
+            if type(addr) == str:
+                addr = int(addr, 16) if addr.startswith('0x') else int(addr)
+            if is_pie(ir.modules[0]):
+                addr -= b_addr # subtract base address for PIE binaries
+            fn[addr] = name
+    # Rename functions
+    names_set = 0
+    module = ir.modules[0]
+    for f_id, entryBlocks in module.aux_data["functionEntries"].data.items():
+        for x in entryBlocks:
+            if type(x) == CodeBlock and x.address != None and x.address in fn:
+                name_sym = module.aux_data["functionNames"].data[f_id]
+                name_sym.name = fn[x.address]
+                names_set += 1
+    log.info(f"Set {names_set} function names using function map")
 
 if __name__ == "__main__":
     args = parse_args()
@@ -201,7 +237,7 @@ if __name__ == "__main__":
     # load IR and generate mappings
     start_t = time.time()
     ir: gtirb.IR = gtirb.IR.load_protobuf(args.input_ir)
-    mappings = utils.get_address_to_byteblock_mappings(ir)
+    mappings = get_address_to_byteblock_mappings(ir)
     diff = round(time.time()-start_t, 3)
     log.info(f'IR loaded in {diff} seconds')
 
@@ -220,14 +256,14 @@ if __name__ == "__main__":
             os.chmod(build_script, st.st_mode | stat.S_IEXEC)
         GEN_SCRIPT_OPTS.gen_output = build_script
 
-    # fix gtirb issue that breaks data alignment
-    # fixup_data_align(ir)
-
     # pre-process ARM64 binaries to fix switch identification
     switches = None
     if ir.modules[0].file_format == gtirb.Module.FileFormat.ELF \
             and ir.modules[0].isa == gtirb.Module.ISA.ARM64:
         switches = fix_arm64_switches(ir)
+    # pre-process IR by recording given function names
+    if args.func_names:
+        preprocess_add_function_names(ir, args.func_names)
 
     # Run chosen rewriter
     rewriter: Rewriter = args.rewriter(ir, args, mappings, args.gen_build_script)

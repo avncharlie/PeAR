@@ -18,7 +18,7 @@ from gtirb_capstone.instructions import GtirbInstructionDecoder
 import gtirb_rewriting._auxdata as _auxdata
 
 from .arch_utils import ArchUtils
-from ..utils import run_cmd, check_executables_exist
+from ..utils import is_pie, run_cmd, check_executables_exist
 from .. import DUMMY_LIB_NAME
 from ..instruction_finder import find_asm_pattern, split_asm
 
@@ -213,7 +213,6 @@ class LinuxUtils(ArchUtils):
         elf_symbol_info: dict[Symbol, tuple[int, str, str, str, int]] = {}
         exec_stack: bool = False
         stack_size: int = -1
-        binary_type: list[str] = []
 
         for module in ir.modules:
             # Get data from aux tables
@@ -222,7 +221,6 @@ class LinuxUtils(ArchUtils):
             lib_version_imports: dict[str, dict[int, str]] = {} # lib: {ID: version}
             exec_stack = module.aux_data['elfStackExec'].data
             stack_size = module.aux_data['elfStackSize'].data
-            binary_type = _auxdata.binary_type.get_or_insert(module)
             library_paths = _auxdata.library_paths.get_or_insert(module)
             elf_symbol_info = _auxdata.elf_symbol_info.get_or_insert(module)
             symbol_forwarding = _auxdata.symbol_forwarding.get_or_insert(module)
@@ -330,7 +328,7 @@ class LinuxUtils(ArchUtils):
         stack_size_cmd = ['-z', f'stack-size={stack_size}']
 
         # Set pie or not
-        pie_cmd = ['-pie' if 'PIE' in binary_type else '-no-pie']
+        pie_cmd = ['-pie' if is_pie(ir.modules[0]) else '-no-pie']
 
         # Link it all together
         binary_path = f'{output}.exe'
