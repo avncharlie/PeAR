@@ -26,6 +26,10 @@ log = logging.getLogger(__name__)
 from . import GEN_SCRIPT_OPTS
 DRY_RUN_WHITELIST = ['ddisasm', 'gtirb-pprinter']
 
+def is_pie(module: Module):
+    binary_type = _auxdata.binary_type.get_or_insert(module)
+    return 'PIE' in binary_type
+
 def log_cmd(cmd: list[str],
             working_dir: Optional[str]=None,
             env_vars: Optional[dict]=None):
