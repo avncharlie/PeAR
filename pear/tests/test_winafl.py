@@ -3,8 +3,6 @@ import sys
 import glob
 import pytest
 import shutil
-import pathlib
-import platform
 import textwrap
 import importlib
 import subprocess
@@ -17,7 +15,7 @@ from typing import NamedTuple
 from ..utils import run_cmd, check_executables_exist
 from .conftest import windows_only, get_gen_binary_from_pear_output
 
-TEST_PROG_DIR = importlib.resources.files(__package__) / 'test_winafl'
+TEST_PROG_DIR = importlib.resources.files(__package__) / 'test_fuzz'
 WINAFL_TIMEOUT=30
 GENERIC_TARGET_FUNC_NAME='read_and_test_file'
 
@@ -116,9 +114,9 @@ def prepare_generic_test_binary(prog_name: str,
     Assumes:
         - There exists 'build_<ARCH>.bat' script in TEST_PROG_DIR/<PROG> to
           build the program for a specified architecture.
-        - There exists a fuzzer corpus directory 'corpus' TEST_PROG_DIR/<PROG>.
+        - There exists a fuzzer corpus directory TEST_PROG_DIR/<PROG>/corpus.
         - The program will export a function called GENERIC_TARGET_FUNC_NAME 
-          that will be the target fuzzing function .
+          that will be the target fuzzing function.
 
     See befunge and simple for examples.
 
@@ -208,11 +206,12 @@ def prepare_libxml2(tmp_path_factory: pytest.TempPathFactory, devcmd_bat: str,
 
     return TargetProgram(
         name='xmllint',
-        binary_path=bin_path,
+        binary_path=str(bin_path),
         corpus=str(corpus),
         target_func_address=target_func
     )
 
+# Invoke the given fixture
 @pytest.fixture
 def prepare_test_program(request: pytest.FixtureRequest) -> TargetProgram:
     return request.getfixturevalue(request.param)
@@ -221,6 +220,14 @@ def prepare_test_program(request: pytest.FixtureRequest) -> TargetProgram:
 # and will call them to generate a TargetProgram
 @windows_only
 @pytest.mark.parametrize(
+    # This is a table with columns prepare_test_program, arch.
+    # So each test is run with prepare_test_program = tuple[0] and arch = tuple[1].
+    # Well, prepare_test_program will actually be set to prepare_test_program(tuple[0]),
+    #   due to that parameter being indirect.
+    # and prepare_test_program will dynamically run the given fixture.
+    # So tuple[0] specifies the fixture to run to give the TargetProgram needed
+    #  (via indirect func prepare_test_program getting the parametrized values in tuple[0] and then calling them as fixtures)
+    # and tuple[1] is what arch is going to be
     'prepare_test_program,arch',
     [
         ('prepare_befunge', gtirb.Module.ISA.IA32),
@@ -271,7 +278,7 @@ def test_winafl_rewriter(
     inst_prog = str(inst_prog)
 
     # We generate a bat file to run the instrumented binary under WinAFL for
-    # 15 seconds. We check if its successful by verifying the fuzzer_stats
+    # 30 seconds. We check if its successful by verifying the fuzzer_stats
     # file exists, which AFL only seems to create once its begins fuzzing.
 
     # I used os.system to spawn the WinAFL process as for some reason WinAFL

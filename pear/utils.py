@@ -17,13 +17,16 @@ from gtirb import Module
 from gtirb.symbol import Symbol
 import gtirb_functions
 from gtirb_rewriting import (
+    Pass,
     Patch,
+    PassManager,
     RewritingContext
 )
 
 log = logging.getLogger(__name__)
 
 from . import GEN_SCRIPT_OPTS
+from . import DUMMY_LIB_NAME
 DRY_RUN_WHITELIST = ['ddisasm', 'gtirb-pprinter']
 
 def is_pie(module: Module):
@@ -204,6 +207,44 @@ def align_section(module: Module, section: str, balign: Optional[int]=16):
     # Inserted patch data doesn't have an address so it won't be within sorted_dbs
     if len(sorted_db) > 0:
         alignment[sorted_db[0]] = balign
+
+
+def get_symbols_from_file(obj_path: str, working_dir: str) -> list[str]:
+    '''
+    Use Ddisasm to get global symbols from object file
+    :param obj_path: path of object to disassemble
+    :param working_dir: working directory
+    :returns: list of global symbol names
+    '''
+    obj_ir_f = os.path.join(working_dir, 'cov_obj.gtirb')
+    # import here to avoid circular import
+    from .ddisasm import ddisasm
+    ddisasm(obj_path, obj_ir_f, hide=False)
+    obj_ir = gtirb.IR.load_protobuf(obj_ir_f)
+    obj_module = obj_ir.modules[0]
+    symbols_aux = _auxdata.elf_symbol_info.get_or_insert(obj_module)
+    symbols = []
+    for sym, (_, _, binding, visibility, _) in symbols_aux.items():
+        if binding == 'GLOBAL' and visibility != 'HIDDEN':
+            symbols.append(sym.name)
+    return symbols
+
+def add_symbols_to_ir(symbols: list[str], ir: gtirb.IR):
+    '''
+    Given a list of symbols, inserts them into an IR
+    :param symbols: list of symbol names to insert
+    :param ir: IR to insert them into
+    '''
+    class AddSymbols(Pass):
+        def __init__(self, symbols: list[str]):
+            super().__init__()
+            self.symbols = symbols
+        def begin_module(self, module, functions, rewriting_ctx):
+            for sym in self.symbols:
+                rewriting_ctx.get_or_insert_extern_symbol(sym, DUMMY_LIB_NAME)
+    manager = PassManager()
+    manager.add(AddSymbols(symbols))
+    manager.run(ir)
 
 
 def get_basic_blocks(function: gtirb_functions.Function) -> list[list[gtirb.CodeBlock]]:

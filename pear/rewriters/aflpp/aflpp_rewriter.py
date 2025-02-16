@@ -1,3 +1,5 @@
+# pyright: reportAttributeAccessIssue=false
+
 import os
 import json
 import uuid
@@ -10,6 +12,7 @@ import textwrap
 import importlib
 
 from collections import OrderedDict
+from functools import partial
 from typing import Optional
 
 import gtirb
@@ -22,27 +25,49 @@ from gtirb_rewriting import (
     BlockPosition,
     SingleBlockScope
 )
+import gtirb_rewriting._auxdata as _auxdata
 from gtirb_capstone.instructions import GtirbInstructionDecoder
 
+from ... import utils 
 from ... import DUMMY_LIB_NAME
-from ... import utils
-from ...utils import run_cmd, check_executables_exist
+from ...utils import run_cmd, get_codeblock_to_address_mappings, align_section
+from ...arch_utils.linux_utils import LinuxUtils, LinuxX64Utils, LinuxARM64Utils, SwitchData
 from ...arch_utils.windows_utils import (WindowsUtils, WindowsX64Utils, WindowsX86Utils)
 
 from ..rewriter import Rewriter
 
 log = logging.getLogger(__name__)
 
+AFL_TRACE_FUNC = '__afl_trace'
+
 class AFLPlusPlusRewriter(Rewriter):
     """
     This class implements AFL++ instrumentation on x64 Linux binaries.
     """
     @staticmethod
+    def get_description():
+        return textwrap.dedent('''\
+            Add AFL++ instrumentation to 64-bit Linux binaries.
+            By default, starts fuzzing at binary entrypoint. To select a better location,
+            use --deferred-fuzz-address/--deferred-fuzz-function.
+
+            By default, a new binary will be spun up for every test. To repeatedly call one
+            function for each fuzzing test, see the persistent mode flags. 
+
+            By default, AFL++ relies on file IO to send testcases. To use shared memory to
+            send testcases instead, use the sharedmem flags. In most cases, the sharedmem
+            call location should be the same as the deferred fuzz / persistent mode
+            location.
+
+            See the tests within PeAR for AFL++ rewriter for example usage.
+        ''')
+
+    @staticmethod
     def build_parser(parser: argparse._SubParsersAction):
         parser = parser.add_parser(AFLPlusPlusRewriter.name(),
-                                   description= "Add AFL++ instrumentation to 64-bit Linux binaries.",
-                                   help='Add AFL++ instrumentation',
-                                   add_help=False)
+                                   description=AFLPlusPlusRewriter.get_description(),
+                                   formatter_class=argparse.RawTextHelpFormatter,
+                                   help='Add AFL++ instrumentation')
 
         def is_hex_address(loc):
             try:
@@ -50,80 +75,63 @@ class AFLPlusPlusRewriter(Rewriter):
             except ValueError:
                 parser.error(f'Can\'t parse "{loc}" as address, please provide hex address (e.g. 0x75a0)')
 
-        required = parser.add_argument_group('required arguments')
-        optional = parser.add_argument_group('optional arguments')
-        required.add_argument(
-            '--target-func', required=True, type=is_hex_address,
-            help="Address of target function that will be interrogated during fuzzing"
-        )
+        # Inlined tracing (no point is slower)
+        # parser.add_argument(
+        #     '--inlined-tracing', default=False, action='store_true', required=False,
+        #     help=textwrap.dedent('''\
+        #         Use inline tracing. Makes binary bigger and a bit slower. Don't
+        #         use this. Default: false
+        #     ''')
+        # )
 
-        optional.add_argument(
-            '-h',
-            '--help',
-            action='help',
-            default=argparse.SUPPRESS,
-            help='Show this help message and exit'
-        )
-
-        optional.add_argument(
-            '--ignore-functions', required=False, nargs='+',
-            help="Addresses of functions to not instrument",
-            metavar=("ADDR1", "ADDR2")
-        )
-
-        optional.add_argument(
-            '--extra-link-libs', required=False, nargs='+',
-            help="Extra libraries to link to final executable",
-            metavar=("LIB1", "LIB2")
-        )
-
-
-        required.add_argument(
-            '--patch-dir', required=True,
-            help="Directory of asm support functions"
-        )
-
-        # deferred initialisation 
-        required.add_argument(
-            '--forkserver-init-address', required=False,
-            help="Address to initialise forkserver"
-        )
-        required.add_argument(
-            '--forkserver-init-func', required=False,
-            help="Function in which to initialise forkserver"
-        )
-
-        # persistent mode args
-        required.add_argument(
-            '--persistent-mode-address', required=False,
-            help="Function address to start persistent mode"
-        )
-        required.add_argument(
-            '--persistent-mode-func', required=False,
-            help="Function in which to apply persistent mode"
-        )
-        required.add_argument(
-            '--persistent-mode-count', required=False,
-            help="Persistent mode count"
-        )
-
-        # sharedmem
-        required.add_argument(
-            '--sharedmem-hook-location', required=False,
+        # never zero counters
+        parser.add_argument(
+            '--never-zero', default=False, action='store_true', required=False,
             help=textwrap.dedent('''\
-            Location to insert sharedmem hook. Can be one of
-              PERSISTENT_LOOP
-                Calls the hook immediately prior to the start of the persistent loop
-              FORKSERVER_INIT
-                Calls the hook immediately after the forkserver initialisation
-                (as the child process begins)
-              <address>
-                Calls the hook at specified address
+                If set, counters will be set to 1 when overflowed (instead of 
+                zero, which AFL sees as no coverage has been achieved on that
+                tuple). Default: False
             ''')
         )
-        required.add_argument(
-            '--sharedmem-hook-func-name', required=False,
-            help="Name of function to be called as sharedmem hook"
+
+        # Deferred initialisation 
+        parser.add_argument(
+            '--deferred-fuzz-address', required=False, type=is_hex_address,
+            help="Address to start fuzzing test runs (i.e initialise forkserver)"
+        )
+        parser.add_argument(
+            '--deferred-fuzz-function', required=False,
+            help="Function to start fuzzing test runs (i.e initialise forkserver)"
+        )
+
+        # Persistent mode
+        parser.add_argument(
+            '--persistent-mode-address', required=False, type=is_hex_address,
+            help='Address of function for persistent mode (repeatedly called for each fuzzing test).'
+        )
+        parser.add_argument(
+            '--persistent-mode-function', required=False,
+            help='Function for persistent mode (repeatedly called for each fuzzing test)'
+        )
+        parser.add_argument(
+            '--persistent-mode-count', type=int, default=10000, required=False,
+            help="Number of times to call function before forking a new test binary. Default: 10000"
+        )
+
+        # Sharedmem fuzzing
+        parser.add_argument(
+            '--sharedmem-call-address', required=False, type=is_hex_address,
+            help="Address to insert a call to the sharedemem hook"
+        )
+        parser.add_argument(
+            '--sharedmem-call-function', required=False,
+            help="Function to insert a call to the sharedemem hook (at func start)"
+        )
+        parser.add_argument(
+            '--sharedmem-hook-func-name',
+            required=False,
+            default='__afl_rewrite_sharedmem_hook',
+            help="Name of function to be called as sharedmem hook. Default: '__afl_rewrite_sharedmem_hook'"
         )
 
     @staticmethod
@@ -132,11 +140,270 @@ class AFLPlusPlusRewriter(Rewriter):
 
     def __init__(self, ir: gtirb.IR, args: argparse.Namespace,
                  mappings: OrderedDict[int, uuid.UUID], dry_run: bool):
-        raise NotImplementedError
+        assert len(ir.modules) == 1, "Only support 1 module"
 
-    def generate(self,
-                 ir_file: str, output: str, working_dir: str, *args,
+        self.ir = ir
+        self.dry_run = dry_run
+        self.module = ir.modules[0]
+        self.addr_cb_map = mappings
+
+        # self.inline: bool = args.inlined_tracing
+        self.inline: bool = False
+        self.never_zero: bool = args.never_zero
+
+        self.pers_mode_cnt: int | None = args.persistent_mode_count
+        self.shmem_func_name: str | None = args.sharedmem_call_function
+
+        self.def_fuzz_addr: int | None = args.deferred_fuzz_address
+        self.pers_mode_addr: int | None = args.persistent_mode_address
+        self.shmem_call_addr: int | None  = args.sharedmem_call_address
+        # Convert given function names to addresses
+        for f_id, entryBlocks in self.module.aux_data["functionEntries"].data.items():
+            name_sym: gtirb.Symbol = self.module.aux_data["functionNames"].data[f_id]
+            e = entryBlocks.pop()
+            if name_sym.name == args.deferred_fuzz_function:
+                self.def_fuzz_addr = e.address
+            if name_sym.name == args.persistent_mode_function:
+                self.pers_mode_addr = e.address
+            if name_sym.name == args.sharedmem_call_address:
+                self.shmem_call_addr = e.address
+
+    def rewrite(self) -> gtirb.IR:
+        passes = [
+            # Data must be added in a seperate pass before it can be referenced
+            # in other passes.
+            AddAFLPlusPlusDataPass(),
+            AddAFLPlusPlusPass(
+                self.inline,
+                self.never_zero,
+                self.addr_cb_map,
+                self.def_fuzz_addr)
+        ]
+        # gtirb-rewriting's pass manager is bugged and can only handle running
+        # one pass at a time.
+        for p in passes:
+            manager = PassManager()
+            manager.add(p)
+            manager.run(self.ir)
+
+        return self.ir
+
+    def generate(self, output: str, working_dir: str, *args,
                  gen_assembly: Optional[bool]=False,
                  gen_binary: Optional[bool]=False,
+                 switch_data: Optional[list[SwitchData]]=None,
                  **kwargs):
-        raise NotImplementedError
+        # build instrumentation object
+        folder_name = 'instrumentation'
+        orig_src = importlib.resources.files(__package__) / folder_name
+        build_dir = os.path.join(working_dir, folder_name)
+        shutil.copytree(orig_src, build_dir, dirs_exist_ok=True)
+        obj_src_path = os.path.join(build_dir, 'afl-instrumentation.c')
+        static_obj_fname = 'instrumentation.o'
+        static_obj_path = os.path.join(working_dir, static_obj_fname)
+        cmd = ['gcc', '-c', '-o', static_obj_path, obj_src_path]
+        run_cmd(cmd)
+
+        if self.dry_run:
+            raise NotImplementedError
+        symbols = utils.get_symbols_from_file(static_obj_path, working_dir)
+        utils.add_symbols_to_ir(symbols, self.ir)
+
+        to_link = [static_obj_fname]
+        LinuxUtils.generate(output, working_dir, self.ir,
+                            gen_assembly=gen_assembly,
+                            gen_binary=gen_binary, obj_link=to_link,
+                            switch_data=switch_data)
+
+class AddAFLPlusPlusDataPass(Pass):
+    """
+    Add data (global variables) needed for AFL instrumentation to binary
+    """
+    def __init__(self, is_persistent=False, is_deferred=False, is_sharedmem_fuzzing=False):
+        super().__init__()
+        self.is_persistent = is_persistent
+        self.is_deferred = is_deferred
+        self.is_sharedmem_fuzzing = is_sharedmem_fuzzing
+
+    def begin_module(self, module, functions, rewriting_ctx):
+        # AFL searches the binaries for these signatures
+        persistent_mode_sig = ""
+        if self.is_persistent:
+            persistent_mode_sig = """
+                .PERSISTENT_MODE_SIGNATURE:
+                    .string "##SIG_AFL_PERSISTENT##"
+                    .space 9
+            """
+
+        deferred_initialisation_sig = ""
+        if self.is_deferred:
+            deferred_initialisation_sig = """
+                .DEFERRED_INITIALISATION_SIGNATURE:
+                    .string "##SIG_AFL_DEFER_FORKSRV##"
+                    .space 6
+            """
+
+        rewriting_ctx.register_insert(
+            SingleBlockScope(module.entry_point, BlockPosition.ENTRY),
+            Patch.from_function(lambda _:f'''
+                # GTIRB patches must have at least one basic block
+                nop
+
+                .data
+                .globl __afl_area_ptr
+                __afl_area_ptr:   .quad 0
+                .globl __afl_prev_loc
+                __afl_prev_loc:   .quad 0
+
+                .rodata
+                .space 16
+                {persistent_mode_sig}
+                {deferred_initialisation_sig}
+            ''', Constraints(x86_syntax=X86Syntax.INTEL))
+        )
+
+        align_section(module, '.data', balign=16)
+        align_section(module, '.rodata', balign=16)
+
+class AddAFLPlusPlusPass(Pass):
+    """
+    Add AFL++ instrumentation to x64 binaries.
+    """
+    def __init__(self, inline_tracing: bool, never_zero: bool,
+                 addr_cb_map: OrderedDict[int, uuid.UUID],
+                 def_fuzz_addr: int | None):
+        super().__init__()
+        self.inline_tracing = inline_tracing
+        self.never_zero = never_zero
+        self.addr_cb_map: OrderedDict[int, uuid.UUID] = addr_cb_map
+        self.init_forkserver: int = def_fuzz_addr
+        if not def_fuzz_addr:
+            log.warning("No deferred fuzzing location; initialising at program entrypoint."
+                        " For faster fuzzing, specify an initialisation point.")
+
+    @staticmethod
+    def trace_asm(block_id: int, inline: bool, never_zero: bool = False) -> str:
+        '''
+        Tracing asm.
+        :param inline: should the trace be inlined
+        :param never_zero: if inlined, should counter wrap to 1 instead of 0
+        :param block_id: unique ID of block patch is being generated for
+        '''
+        trace = f'call {AFL_TRACE_FUNC}'
+        if inline:
+            trace = AddAFLPlusPlusPass.tracing_asm(inline=True, never_zero=never_zero)
+        return f'''
+            # Using lea + mov as it might be faster than consecutive pushes
+            # Subtract stack past red-zone (keep it unmodified)
+            # red zone = 128 = 0x80. we push two registers, so sub 0x90
+            lea rsp,[rsp-0x90]
+            mov qword ptr [rsp], rcx
+            mov qword ptr [rsp+0x8], rax # rax clobbered by lahf inside func
+
+            mov rcx, {hex(block_id)}
+            {trace}
+
+            mov rax, qword ptr [rsp+0x8]
+            mov rcx, qword ptr [rsp]
+            lea rsp, [rsp+0x90]
+        '''
+
+    @staticmethod
+    def trace_func_asm(never_zero: bool = False) -> str:
+        return AddAFLPlusPlusPass.tracing_asm(inline=False, never_zero=never_zero)
+
+    @staticmethod
+    def tracing_asm(inline: bool = False, never_zero: bool = False) -> str:
+        '''
+        Tracing code
+        Heavily inspired via afl-as assembly patches. 
+        Small tweak to remove rdx dependency (makes it very slightly faster)
+        See insp here: https://github.com/mirrorer/afl/blob/master/afl-as.h
+        :param inline: if not inline, will add ret at end
+        :param never_zero: if counters should wrap to 1 instead of 0
+        '''
+        inc_counter = 'inc byte ptr [rcx]'
+        if never_zero:
+            inc_counter = textwrap.dedent('''\
+                add byte ptr [rcx], 0x1
+                adc byte ptr [rcx], 0x0 # map[index] = 1 on overflow
+            ''')
+        ret = '' if inline else 'ret' 
+        return f'''
+            # Store flags on stack (faster than pushf)
+            lahf
+            seto al
+            
+            xor rcx, qword ptr [rip + __afl_prev_loc]       # rcx = curr_loc ^ prev_loc 
+            xor qword ptr [rip + __afl_prev_loc], rcx       # prev_loc = curr_loc
+            shr qword ptr [rip + __afl_prev_loc], 1         # prev_loc = curr_loc >> 1
+            add rcx, qword ptr [rip + __afl_area_ptr]       # rcx = __afl_area_ptr[curr_loc ^ prev_loc]
+            {inc_counter}                                   # __afl_area_ptr[curr_loc ^ prev_loc]++
+            
+            # Return
+            add al,0x7f
+            sahf
+            {ret}
+        '''
+
+    def begin_module(self, module, functions, rewriting_ctx):
+        assert module.entry_point != None, "cannot find entrypoint"
+
+        if not self.init_forkserver:
+            self.init_forkserver = module.entry_point.address
+
+        rewriting_ctx.get_or_insert_extern_symbol('__afl_setup', DUMMY_LIB_NAME)
+        rewriting_ctx.get_or_insert_extern_symbol('__afl_start_forkserver', DUMMY_LIB_NAME)
+
+        # Call AFL setup at entrypoint
+        # This attaches to AFL shared memory and does other init stuff
+        rewriting_ctx.register_insert(
+            SingleBlockScope(module.entry_point, BlockPosition.ENTRY),
+            Patch.from_function(
+                lambda _: LinuxX64Utils.call_function('__afl_setup'),
+                Constraints(x86_syntax=X86Syntax.INTEL)
+            )
+        )
+
+        # Init forkserver
+        utils.insert_patch_at_address(
+            self.init_forkserver,
+            Patch.from_function(
+                lambda _: LinuxX64Utils.call_function('__afl_start_forkserver'),
+                Constraints(x86_syntax=X86Syntax.INTEL)
+            ),
+            self.addr_cb_map,
+            rewriting_ctx
+        )
+
+        # Insert trace function if not inline
+        if not self.inline_tracing:
+            rewriting_ctx.register_insert_function(
+                AFL_TRACE_FUNC,
+                Patch.from_function(
+                    partial (
+                        lambda nz, _: AddAFLPlusPlusPass.trace_func_asm(nz),
+                    self.never_zero),
+                    Constraints(x86_syntax=X86Syntax.INTEL)
+                )
+            )
+
+        instr_count = 0
+        for func in functions:
+            blocks = utils.get_basic_blocks(func)
+            for blocklist in blocks:
+                block_id = random.getrandbits(16)
+                # create trace patch
+                rewriting_ctx.register_insert(
+                    SingleBlockScope(blocklist[0], BlockPosition.ENTRY),
+                    Patch.from_function(
+                        partial(
+                            lambda id, it, nz, _: AddAFLPlusPlusPass.trace_asm(id, it, nz),
+                        block_id, self.inline_tracing, self.never_zero),
+                        Constraints(x86_syntax=X86Syntax.INTEL)
+                    )
+                )
+                instr_count += 1
+
+        in_info = ' inline ' if self.inline_tracing else ' '
+        log.info(f"Adding{in_info}tracing code to {instr_count} locations ...")

@@ -1,3 +1,5 @@
+# pyright: reportAttributeAccessIssue=false
+
 import os
 import json
 import uuid
@@ -33,9 +35,9 @@ from gtirb_capstone.instructions import GtirbInstructionDecoder
 import gtirb_rewriting._auxdata as _auxdata
 
 from ... import DUMMY_LIB_NAME
+from ... import utils
 from ...utils import run_cmd, get_codeblock_to_address_mappings, align_section
 from ...arch_utils.linux_utils import LinuxUtils, LinuxX64Utils, LinuxARM64Utils, SwitchData
-from ...ddisasm import ddisasm
 from ..rewriter import Rewriter
 
 COV_FILE_PREFIX_LABEL = 'cov_file_prefix'
@@ -223,17 +225,10 @@ class TraceRewriter(Rewriter):
         cmd = ['gcc', '-c', '-o', static_obj_path, obj_src_path]
         run_cmd(cmd)
 
-        # Add external symbols from this object
+        # Get external symbols from this object
         symbols = []
         if not self.dry_run:
-            obj_ir_f = os.path.join(working_dir, 'cov_obj.gtirb')
-            ddisasm(static_obj_path, obj_ir_f, hide=False)
-            obj_ir = gtirb.IR.load_protobuf(obj_ir_f)
-            obj_module = obj_ir.modules[0]
-            symbols_aux = _auxdata.elf_symbol_info.get_or_insert(obj_module)
-            for sym, (_, _, binding, visibility, _) in symbols_aux.items():
-                if binding == 'GLOBAL' and visibility != 'HIDDEN':
-                    symbols.append(sym.name)
+            symbols = utils.get_symbols_from_file(static_obj_path, working_dir)
         else:
             symbols = ['close', 'track_cov_fast', COV_FILE_PREFIX_LABEL, 'exit',
                        'snprintf', 'track_cov_slow', 'fd', 'write', 'getpid',
@@ -241,9 +236,7 @@ class TraceRewriter(Rewriter):
             log.warning('Using cached symbols from coverage object as we are doing dry run')
 
         # Add symbols to the IR
-        manager = PassManager()
-        manager.add(AddSymbols(symbols))
-        manager.run(self.ir)
+        utils.add_symbols_to_ir(symbols, self.ir)
 
         # Build binary, linking instrumentation object
         to_link = [static_obj_fname]
@@ -261,15 +254,6 @@ class TraceRewriter(Rewriter):
         with open(bbinfo_dump, 'w') as f:
             json.dump(out, f)
         log.info(f'Auxillary information saved to: {bbinfo_dump}')
-
-
-class AddSymbols(Pass):
-    def __init__(self, symbols: list[str]):
-        super().__init__()
-        self.symbols = symbols
-    def begin_module(self, module, functions, rewriting_ctx):
-        for sym in self.symbols:
-            rewriting_ctx.get_or_insert_extern_symbol(sym, DUMMY_LIB_NAME)
 
 class AddExecutionPrinting(Pass):
     '''
@@ -434,7 +418,7 @@ class AddCoverage(Pass):
                 nop
 
                 .section .data
-                .globl cov_file_prefix
+                .globl {COV_FILE_PREFIX_LABEL}
                 {COV_FILE_PREFIX_LABEL}:
                     .string "{cov_file_prefix}"
                 .space {padding}

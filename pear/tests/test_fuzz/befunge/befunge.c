@@ -9,6 +9,13 @@
 
 #define STACK_SIZE 64
 
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT
+#endif
+
+
 static char page[LINEWIDTH * PAGEHEIGHT];
 #define cur page[y * LINEWIDTH + x]
 
@@ -258,7 +265,7 @@ static int befunge_interpreter() {
   return 0;
 }
 
-__declspec(dllexport) int read_and_test_file(char *fname) {
+EXPORT int read_and_test_file(char *fname) {
   int rc = 0;
 
   FILE *fp = fopen(fname, "r");
