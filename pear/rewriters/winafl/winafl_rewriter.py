@@ -1,3 +1,5 @@
+# pyright: reportAttributeAccessIssue=false
+
 import os
 import json
 import uuid

@@ -1,0 +1,3 @@
+These files are based from files within AFLPlusPlus commit 7f17a94349830a54d2c899f56b149c0d7f9ffb9c
+The header files are in include/*.h
+afl-instrumentation.c is based upon "instrumentation/afl-compiler-rt.o.c" 

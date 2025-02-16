@@ -4,6 +4,12 @@
 #include <string.h>
 #include <limits.h>
 
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT
+#endif
+
 void test(char *buf) {
     printf("got: %s\n", buf);
 
@@ -29,7 +35,7 @@ void test(char *buf) {
     }
 }
 
-__declspec(dllexport) void read_and_test_file(char *fname) {
+EXPORT void read_and_test_file(char *fname) {
     char buf[100]; 
     memset(buf, 0, 100);
 
