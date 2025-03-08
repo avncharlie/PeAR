@@ -120,6 +120,41 @@ def prepare_libxml2(tmp_path_factory: pytest.TempPathFactory) -> TargetProgram:
 def prepare_test_program(request: pytest.FixtureRequest) -> TargetProgram:
     return request.getfixturevalue(request.param)
 
+def run_aflpp_test(inst_prog: str, corpus: str, afl_out: str,
+                   hide_afl_ui: bool) -> float:
+    '''Fuzz binary with AFL++ and return execs per second'''
+    inst_prog = str(inst_prog)
+    # Ignore the usual system config AFL wants you to set
+    hide_ui = []
+    if hide_afl_ui:
+        hide_ui = ['AFL_NO_UI=1']
+    cmd = hide_ui + \
+            ['AFL_SKIP_CPUFREQ=1', 'AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1',
+             'timeout', str(AFLPP_TIMEOUT),
+             'afl-fuzz', '-i', corpus, '-o', afl_out, '--', inst_prog, '@@']
+    str_cmd = ' '.join(cmd)
+    print(f'Fuzzing using cmd: {str_cmd}')
+    os.system(str_cmd)
+
+    # Check fuzzer stats file generated with a value for execs per sec
+    fuzzer_stats = os.path.join(afl_out, "default", "fuzzer_stats")
+    assert os.path.isfile(fuzzer_stats), "AFL fuzzer_stats file not generated, binary failed to fuzz"
+    execs_per_sec = None
+    with open(fuzzer_stats) as f:
+        for l in f:
+            if l.startswith('execs_per_sec'):
+                execs_per_sec = float((l.split(':')[1]).strip())
+    assert execs_per_sec != None, "execs_per_sec stat not found in fuzzer_stats, binary didn't fuzz"
+    return execs_per_sec
+
+def run_pear(pear_cmd: str) -> str:
+    '''Run PeAR over binary and return instrumented binary'''
+    out, _ = run_cmd(pear_cmd.split(' '))
+    inst_prog = get_gen_binary_from_pear_output(out)
+    # Check instrumented binary exists
+    assert inst_prog != None and os.path.isfile(inst_prog), "Instrumented binary not found after PeAR was run"
+    return inst_prog
+
 # see test_winafl_rewriter for explanation of the parametrization
 @linux_only
 @pytest.mark.parametrize(
@@ -140,41 +175,29 @@ def test_aflpp_rewriter(
     ir_cache: bool,
 ):
     test_prog = prepare_test_program
-
-    # Use pear to instrument test program
-    out_dir = tmp_path_factory.mktemp('out')
+    progname = test_prog.name
+    binpath = test_prog.binary_path
+    target_func = test_prog.target_func_name
+    corpus = test_prog.corpus
+    def out_dir():
+        return str(tmp_path_factory.mktemp('out'))
     ir_cache_arg = ''
     if ir_cache:
         ir_cache_arg = f'--ir-cache {ir_cache}'
-    pear_cmd = f'{sys.executable} -m pear {ir_cache_arg} --input-binary {test_prog.binary_path} --output-dir {out_dir} --gen-binary AFL++ --deferred-fuzz-function {test_prog.target_func_name}'
-    out, _ = run_cmd(pear_cmd.split(' '))
-    inst_prog = get_gen_binary_from_pear_output(out)
 
-    # Check instrumented binary exists
-    assert inst_prog != None and os.path.isfile(inst_prog), "Instrumented binary not found after PeAR was run"
+    # Test 1: deferred mode
+    pear_cmd = f'{sys.executable} -m pear {ir_cache_arg} --input-binary {binpath} --output-dir {out_dir()} --gen-binary AFL++ --deferred-fuzz-function {target_func}'
+    inst_prog = run_pear(pear_cmd)
+    def_mode_execs = run_aflpp_test(inst_prog, corpus, out_dir(), hide_afl_ui)
+    print(f'Using deferred mode, fuzzed {progname} at {def_mode_execs} execs per sec.')
+    
+    # Test 2: deferred mode + persistent mode
+    pear_cmd = f'{sys.executable} -m pear {ir_cache_arg} --input-binary {binpath} --output-dir {out_dir()} --gen-binary AFL++ --deferred-fuzz-function {target_func} --persistent-mode-function {target_func} --persistent-mode-count 2147483647'
+    inst_prog = run_pear(pear_cmd)
+    pers_mode_execs = run_aflpp_test(inst_prog, corpus, out_dir(), hide_afl_ui)
+    print(f'Using deferred+persistent mode, fuzzed {progname} at {pers_mode_execs} execs per sec.')
 
-    # Run under AFL++
-    afl_out = str(tmp_path_factory.mktemp('afl-out'))
-    inst_prog = str(inst_prog)
-    # Ignore the usual system config AFL wants you to set
-    hide_ui = []
-    if hide_afl_ui:
-        hide_ui = ['AFL_NO_UI=1']
-    cmd = hide_ui + \
-            ['AFL_SKIP_CPUFREQ=1', 'AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1',
-             'timeout', str(AFLPP_TIMEOUT),
-             'afl-fuzz', '-i', test_prog.corpus, '-o', afl_out, '--', inst_prog, '@@']
-    str_cmd = ' '.join(cmd)
-    print(f'Fuzzing using cmd: {str_cmd}')
-    os.system(str_cmd)
+    print('\nTo recap:')
+    print(f'Using deferred mode, fuzzed {progname} at {def_mode_execs} execs per sec.')
+    print(f'Using deferred+persistent mode, fuzzed {progname} at {pers_mode_execs} execs per sec.')
 
-    # Check fuzzer stats file generated with a value for execs per sec
-    fuzzer_stats = os.path.join(afl_out, "default", "fuzzer_stats")
-    assert os.path.isfile(fuzzer_stats), "AFL fuzzer_stats file not generated, binary failed to fuzz"
-    execs_per_sec = None
-    with open(fuzzer_stats) as f:
-        for l in f:
-            if l.startswith('execs_per_sec'):
-                execs_per_sec = float((l.split(':')[1]).strip())
-    assert execs_per_sec != None, "execs_per_sec stat not found in fuzzer_stats, binary didn't fuzz"
-    print(f'Fuzzed at {execs_per_sec} execs per sec.')

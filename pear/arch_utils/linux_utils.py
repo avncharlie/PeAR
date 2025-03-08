@@ -18,6 +18,7 @@ from gtirb_capstone.instructions import GtirbInstructionDecoder
 import gtirb_rewriting._auxdata as _auxdata
 
 from .arch_utils import ArchUtils
+from .windows_utils import WindowsX64Utils
 from ..utils import is_pie, run_cmd, check_executables_exist
 from .. import DUMMY_LIB_NAME
 from ..instruction_finder import find_asm_pattern, split_asm
@@ -340,6 +341,14 @@ class LinuxUtils(ArchUtils):
         log.info(f'Generated binary saved to: {binary_path}')
 
 class LinuxX64Utils(LinuxUtils):
+    @staticmethod
+    def backup_registers(label: str) -> str:
+        return WindowsX64Utils.backup_registers(label)
+
+    @staticmethod
+    def restore_registers(label: str) -> str:
+        return WindowsX64Utils.restore_registers(label)
+
     @staticmethod
     def call_function(func: str,
                       save_stack: Optional[int]=128,
