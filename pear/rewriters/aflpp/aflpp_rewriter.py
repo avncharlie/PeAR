@@ -39,6 +39,9 @@ from ..rewriter import Rewriter
 log = logging.getLogger(__name__)
 
 AFL_TRACE_FUNC = '__afl_trace'
+PERS_REG_BACKUP_LABEL = '__persistent_reg_backup'
+PERS_FUNC_BACKUP_LABEL = '__persistent_ret_backup'
+PERS_FIRST_PASS_LABEL = '__first_pass'
 
 class AFLPlusPlusRewriter(Rewriter):
     """
@@ -172,12 +175,17 @@ class AFLPlusPlusRewriter(Rewriter):
         passes = [
             # Data must be added in a seperate pass before it can be referenced
             # in other passes.
-            AddAFLPlusPlusDataPass(),
+            AddAFLPlusPlusDataPass(
+                is_persistent=True if self.pers_mode_addr else False,
+                is_deferred=True if self.def_fuzz_addr else False,
+                is_sharedmem_fuzzing=True if self.shmem_call_addr else False),
             AddAFLPlusPlusPass(
                 self.inline,
                 self.never_zero,
                 self.addr_cb_map,
-                self.def_fuzz_addr)
+                self.def_fuzz_addr,
+                self.pers_mode_addr,
+                self.pers_mode_cnt)
         ]
         # gtirb-rewriting's pass manager is bugged and can only handle running
         # one pass at a time.
@@ -250,13 +258,29 @@ class AddAFLPlusPlusDataPass(Pass):
                 nop
 
                 .data
+                # Globals used by instrumentation object and patches
                 .globl __afl_area_ptr
                 __afl_area_ptr:   .quad 0
+
                 .globl __afl_prev_loc
                 __afl_prev_loc:   .quad 0
 
+                .globl __afl_sharedmem_fuzzing
+                __afl_sharedmem_fuzzing: .quad {1 if self.is_sharedmem_fuzzing else 0}
+
+                .globl __afl_is_persistent
+                __afl_is_persistent: .byte {1 if self.is_persistent else 0}
+                .space 7
+
+                # Data used by persistent mode patch
+                {PERS_REG_BACKUP_LABEL}: .space 0x170
+                {PERS_FUNC_BACKUP_LABEL}: .space 8
+                {PERS_FIRST_PASS_LABEL}: .byte 1
+                .space 7
+
                 .rodata
                 .space 16
+                # Signatures used by afl-fuzz to detect features
                 {persistent_mode_sig}
                 {deferred_initialisation_sig}
             ''', Constraints(x86_syntax=X86Syntax.INTEL))
@@ -271,12 +295,16 @@ class AddAFLPlusPlusPass(Pass):
     """
     def __init__(self, inline_tracing: bool, never_zero: bool,
                  addr_cb_map: OrderedDict[int, uuid.UUID],
-                 def_fuzz_addr: int | None):
+                 def_fuzz_addr: int | None,
+                 pers_mode_addr: int | None,
+                 pers_mode_cnt: int | None):
         super().__init__()
         self.inline_tracing = inline_tracing
         self.never_zero = never_zero
         self.addr_cb_map: OrderedDict[int, uuid.UUID] = addr_cb_map
         self.init_forkserver: int = def_fuzz_addr
+        self.pers_mode: int = pers_mode_addr
+        self.pers_mode_cnt: int = pers_mode_cnt
         if not def_fuzz_addr:
             log.warning("No deferred fuzzing location; initialising at program entrypoint."
                         " For faster fuzzing, specify an initialisation point.")
@@ -346,6 +374,65 @@ class AddAFLPlusPlusPass(Pass):
             {ret}
         '''
 
+    def persistent_patch(self) -> Patch:
+        '''
+        Patch to insert in front of a function to repeatedly fuzz it.
+        '''
+        backup_regs = LinuxX64Utils.backup_registers(PERS_REG_BACKUP_LABEL)
+        restore_regs = LinuxX64Utils.restore_registers(PERS_REG_BACKUP_LABEL)
+        sharedmem_hook_call = ''
+        persistent_mode_patch = Patch.from_function(lambda _: f'''
+            # Backup all original registers
+            {backup_regs}
+
+            # Start of persistent loop
+            .Lsetup_loop:
+
+            movzx eax, BYTE PTR {PERS_FIRST_PASS_LABEL}[rip]
+            test al, al
+            je .Lnot_first_pass
+            # On first pass, save and overwrite legitimate return address
+            pop rax
+            mov QWORD PTR [rip+{PERS_FUNC_BACKUP_LABEL}], rax
+            mov BYTE PTR [rip+{PERS_FIRST_PASS_LABEL}], 0
+
+            .Lnot_first_pass:
+            # On subsequent passes, we push return address on stack to
+            # emulate function call
+            lea rax, [rip+.Lsetup_loop]
+            push rax
+
+            # Check whether to continue loop or not
+            mov     rcx, rsp
+            lea     rsp, [rsp - 0x80]
+            and     rsp, 0xfffffffffffffff0
+            push    rcx
+            push    rcx
+
+            mov edi, {hex(self.pers_mode_cnt)}
+            call __afl_persistent_loop
+
+            pop     rcx
+            mov     rsp, rcx
+           
+            test eax,eax
+            jne .Lstart_func
+
+            # To break loop, restore original return address, restore registers and ret
+            mov rax, QWORD PTR [rip+{PERS_FUNC_BACKUP_LABEL}]
+            lea rsp,[rsp+0x8]
+            push rax
+
+            {restore_regs}
+            ret
+
+            .Lstart_func:
+            # Before starting loop, call sharedmem hook if needed and restore registers
+            {sharedmem_hook_call}
+            {restore_regs}
+        ''', Constraints(x86_syntax=X86Syntax.INTEL))
+        return persistent_mode_patch
+
     def begin_module(self, module, functions, rewriting_ctx):
         assert module.entry_point != None, "cannot find entrypoint"
 
@@ -354,6 +441,7 @@ class AddAFLPlusPlusPass(Pass):
 
         rewriting_ctx.get_or_insert_extern_symbol('__afl_setup', DUMMY_LIB_NAME)
         rewriting_ctx.get_or_insert_extern_symbol('__afl_start_forkserver', DUMMY_LIB_NAME)
+        rewriting_ctx.get_or_insert_extern_symbol('__afl_persistent_loop', DUMMY_LIB_NAME)
 
         # Call AFL setup at entrypoint
         # This attaches to AFL shared memory and does other init stuff
@@ -376,7 +464,7 @@ class AddAFLPlusPlusPass(Pass):
             rewriting_ctx
         )
 
-        # Insert trace function if not inline
+        # Insert trace function
         if not self.inline_tracing:
             rewriting_ctx.register_insert_function(
                 AFL_TRACE_FUNC,
@@ -388,6 +476,7 @@ class AddAFLPlusPlusPass(Pass):
                 )
             )
 
+        # Insert tracing at each each basic block
         instr_count = 0
         for func in functions:
             blocks = utils.get_basic_blocks(func)
@@ -404,6 +493,15 @@ class AddAFLPlusPlusPass(Pass):
                     )
                 )
                 instr_count += 1
+
+        # Add persistent mode patch
+        if self.pers_mode:
+            utils.insert_patch_at_address(
+                self.pers_mode,
+                self.persistent_patch(),
+                self.addr_cb_map,
+                rewriting_ctx
+            )
 
         in_info = ' inline ' if self.inline_tracing else ' '
         log.info(f"Adding{in_info}tracing code to {instr_count} locations ...")

@@ -37,7 +37,7 @@ s32 child_pid;
 void (*old_sigterm_handler)(int) = 0;
 int        __afl_sharedmem_fuzzing __attribute__((weak)) = 0;
 u32 __afl_connected = 0;
-u8 is_persistent;
+extern u8 __afl_is_persistent;
 
 u8 first_pass = 1;
 u32 cycle_cnt;
@@ -49,6 +49,8 @@ u8 *__afl_fuzz_ptr;
 uint32_t __document_mutation_counter = 0;
 
 int __afl_persistent_loop(unsigned int max_cnt) {
+
+  // fprintf(stderr, "DBG: entering __afl_persistent_loop\n");
 
   if (first_pass) {
 
@@ -67,9 +69,9 @@ int __afl_persistent_loop(unsigned int max_cnt) {
 
   } else if (--cycle_cnt) {
 
-    if (__afl_debug) {
-        //fprintf(stderr, "DEBUG: going to stop child, cycle_cnt: %d\n", cycle_cnt);
-    }
+    // if (__afl_debug) {
+    //     fprintf(stderr, "DEBUG: going to stop child, cycle_cnt: %d\n", cycle_cnt);
+    // }
 
     raise(SIGSTOP);
 
@@ -271,7 +273,7 @@ void __afl_start_forkserver(void) {
         // Unsure why exactly this is needed when sharedmem fuzzing without
         // persistent mode (except that it won't work without it)
         // TODO: figure out
-        if (is_persistent) {
+        if (__afl_is_persistent) {
             already_read_first = 1;
         }
     }
@@ -285,26 +287,10 @@ void __afl_start_forkserver(void) {
             already_read_first = 0;
         } else {
             if (read(FORKSRV_FD, &was_killed, 4) != 4) {
-                //fprintf(stderr, "ERROR: read from afl-fuzz\n");
+                fprintf(stderr, "ERROR: read from afl-fuzz\n");
                 _exit(1);
             }
         }
-
-#ifdef _AFL_DOCUMENT_MUTATIONS
-        if (__afl_fuzz_ptr) {
-            char            fn[32];
-            sprintf(fn, "%09u:forkserver", __document_mutation_counter);
-            s32 fd_doc = open(fn, O_WRONLY | O_CREAT | O_TRUNC, DEFAULT_PERMISSION);
-            if (fd_doc >= 0) {
-                if (write(fd_doc, __afl_fuzz_ptr, *__afl_fuzz_len) != *__afl_fuzz_len) {
-                    fprintf(stderr, "write of mutation file failed: %s\n", fn);
-                    unlink(fn);
-                }
-                close(fd_doc);
-            }
-            __document_mutation_counter++;
-        }
-#endif
 
         /* If we stopped the child in persistent mode, but there was a race
            condition and afl-fuzz already issued SIGKILL, write off the old
@@ -319,6 +305,8 @@ void __afl_start_forkserver(void) {
 
         if (!child_stopped) {
             /* Once woken up, create a clone of our process. */
+
+            // fprintf(stderr, "DBG: forking child!\n");
 
             child_pid = fork();
 
@@ -350,12 +338,12 @@ void __afl_start_forkserver(void) {
             _exit(1);
         }
 
-        if (waitpid(child_pid, &status, is_persistent ? WUNTRACED : 0) < 0) {
+        if (waitpid(child_pid, &status, __afl_is_persistent ? WUNTRACED : 0) < 0) {
             fprintf(stderr, "ERROR: waitpid\n");
             _exit(1);
         }
 
-        //if (__afl_debug) {
+        // if (__afl_debug) {
         //    if (WIFEXITED(status)) {
         //        printf("DEBUG: Child process exited normally with status: %d\n", WEXITSTATUS(status));
         //    } else if (WIFSIGNALED(status)) {
@@ -365,16 +353,16 @@ void __afl_start_forkserver(void) {
         //    } else if (WIFCONTINUED(status)) {
         //        printf("DEBUG: Child process resumed after being stopped.\n");
         //    }
-        //}
+        // }
 
         /* In persistent mode, the child stops itself with SIGSTOP to indicate
            a successful run. In this case, we want to wake it up without forking
            again. */
         if (WIFSTOPPED(status)) child_stopped = 1;
 
-        //if (__afl_debug) {
+        // if (__afl_debug) {
         //    fprintf(stderr, "DEBUG: child_stopped: %d\n", child_stopped);
-        //}
+        // }
 
         /* Relay wait status to pipe, then loop back. */
         if (write(FORKSRV_FD + 1, &status, 4) != 4) {
