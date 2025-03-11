@@ -77,7 +77,7 @@ class LinuxUtils(ArchUtils):
             # relocation within the final generated binary
             # (which is needed for data references)
             ret += f'.size {name}, {size}\n'
-            ret += f'{name}:\n.byte {size}\n\n'
+            ret += f'{name}:\n.space {size}\n\n'
         return ret
 
     @staticmethod

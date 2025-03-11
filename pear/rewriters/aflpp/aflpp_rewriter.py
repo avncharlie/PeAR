@@ -9,6 +9,7 @@ import pathlib
 import logging
 import argparse
 import textwrap
+import tempfile
 import importlib
 
 from collections import OrderedDict
@@ -39,7 +40,7 @@ from ..rewriter import Rewriter
 log = logging.getLogger(__name__)
 
 AFL_TRACE_FUNC = '__afl_trace'
-PERS_REG_BACKUP_LABEL = '__persistent_reg_backup'
+REG_BACKUP_LABEL = '__reg_backup'
 PERS_FUNC_BACKUP_LABEL = '__persistent_ret_backup'
 PERS_FIRST_PASS_LABEL = '__first_pass'
 
@@ -78,7 +79,13 @@ class AFLPlusPlusRewriter(Rewriter):
             except ValueError:
                 parser.error(f'Can\'t parse "{loc}" as address, please provide hex address (e.g. 0x75a0)')
 
-        # Inlined tracing (no point is slower)
+        def path_exists(f):
+            if not pathlib.Path(f).exists():
+                parser.error(f'File "{f}" not found')
+            else:
+                return f
+
+        # Inlined tracing (no point in allowing the option, it is slower)
         # parser.add_argument(
         #     '--inlined-tracing', default=False, action='store_true', required=False,
         #     help=textwrap.dedent('''\
@@ -124,17 +131,20 @@ class AFLPlusPlusRewriter(Rewriter):
         # Sharedmem fuzzing
         parser.add_argument(
             '--sharedmem-call-address', required=False, type=is_hex_address,
-            help="Address to insert a call to the sharedemem hook"
+            help="Address to insert a call to the sharedmem hook"
         )
         parser.add_argument(
             '--sharedmem-call-function', required=False,
-            help="Function to insert a call to the sharedemem hook (at func start)"
+            help="Function to insert a call to the sharedmem hook (at func start)"
         )
         parser.add_argument(
-            '--sharedmem-hook-func-name',
-            required=False,
-            default='__afl_rewrite_sharedmem_hook',
-            help="Name of function to be called as sharedmem hook. Default: '__afl_rewrite_sharedmem_hook'"
+            '--sharedmem-obj', required=False, type=path_exists,
+            help="Object containing sharedmem hook. Should be output of: gcc -c custom_hook.c"
+        )
+        parser.add_argument(
+            '--sharedmem-hook-func-name', required=False,
+            default='__pear_sharedmem_hook',
+            help="Name of function to be called as sharedmem hook. Default: '__pear_sharedmem_hook'"
         )
 
     @staticmethod
@@ -155,7 +165,12 @@ class AFLPlusPlusRewriter(Rewriter):
         self.never_zero: bool = args.never_zero
 
         self.pers_mode_cnt: int | None = args.persistent_mode_count
-        self.shmem_func_name: str | None = args.sharedmem_call_function
+        self.shmem_hook_name: str | None = args.sharedmem_hook_func_name
+        self.shmem_hook_obj: str | None = args.sharedmem_obj
+        if self.shmem_hook_obj:
+            with tempfile.TemporaryDirectory() as tmp:
+                symbols = utils.get_symbols_from_file(self.shmem_hook_obj, tmp)
+            assert self.shmem_hook_name in symbols, f"Could not find symbol {self.shmem_hook_name} in object {self.shmem_hook_obj}!"
 
         self.def_fuzz_addr: int | None = args.deferred_fuzz_address
         self.pers_mode_addr: int | None = args.persistent_mode_address
@@ -168,10 +183,12 @@ class AFLPlusPlusRewriter(Rewriter):
                 self.def_fuzz_addr = e.address
             if name_sym.name == args.persistent_mode_function:
                 self.pers_mode_addr = e.address
-            if name_sym.name == args.sharedmem_call_address:
+            if name_sym.name == args.sharedmem_call_function:
                 self.shmem_call_addr = e.address
 
     def rewrite(self) -> gtirb.IR:
+        if self.shmem_hook_name:
+            utils.add_symbols_to_ir([self.shmem_hook_name], self.ir)
         passes = [
             # Data must be added in a seperate pass before it can be referenced
             # in other passes.
@@ -185,7 +202,9 @@ class AFLPlusPlusRewriter(Rewriter):
                 self.addr_cb_map,
                 self.def_fuzz_addr,
                 self.pers_mode_addr,
-                self.pers_mode_cnt)
+                self.pers_mode_cnt,
+                self.shmem_call_addr,
+                self.shmem_hook_name)
         ]
         # gtirb-rewriting's pass manager is bugged and can only handle running
         # one pass at a time.
@@ -215,9 +234,16 @@ class AFLPlusPlusRewriter(Rewriter):
         if self.dry_run:
             raise NotImplementedError
         symbols = utils.get_symbols_from_file(static_obj_path, working_dir)
+        if self.shmem_hook_obj:
+            symbols += utils.get_symbols_from_file(self.shmem_hook_obj, working_dir)
         utils.add_symbols_to_ir(symbols, self.ir)
 
         to_link = [static_obj_fname]
+        if self.shmem_hook_obj:
+            hook = os.path.basename(self.shmem_hook_obj)
+            shutil.copyfile(self.shmem_hook_obj, os.path.join(working_dir, hook))
+            to_link.append(hook)
+
         LinuxUtils.generate(output, working_dir, self.ir,
                             gen_assembly=gen_assembly,
                             gen_binary=gen_binary, obj_link=to_link,
@@ -259,22 +285,27 @@ class AddAFLPlusPlusDataPass(Pass):
 
                 .data
                 # Globals used by instrumentation object and patches
+                #   tracing
                 .globl __afl_area_ptr
                 __afl_area_ptr:   .quad 0
-
                 .globl __afl_prev_loc
                 __afl_prev_loc:   .quad 0
 
+                #   shared memory fuzzing
                 .globl __afl_sharedmem_fuzzing
                 __afl_sharedmem_fuzzing: .quad {1 if self.is_sharedmem_fuzzing else 0}
+                .globl __afl_fuzz_len
+                __afl_fuzz_len: .quad 0
+                .globl __afl_fuzz_ptr
+                __afl_fuzz_ptr: .quad 0
 
                 .globl __afl_is_persistent
                 __afl_is_persistent: .byte {1 if self.is_persistent else 0}
                 .space 7
 
-                # Data used by persistent mode patch
-                {PERS_REG_BACKUP_LABEL}: .space 0x170
-                {PERS_FUNC_BACKUP_LABEL}: .space 8
+                # Data used by persistent mode patch / sharedmem hook
+                {REG_BACKUP_LABEL}: .space 0x170
+                {PERS_FUNC_BACKUP_LABEL}: .quad 0
                 {PERS_FIRST_PASS_LABEL}: .byte 1
                 .space 7
 
@@ -297,7 +328,10 @@ class AddAFLPlusPlusPass(Pass):
                  addr_cb_map: OrderedDict[int, uuid.UUID],
                  def_fuzz_addr: int | None,
                  pers_mode_addr: int | None,
-                 pers_mode_cnt: int | None):
+                 pers_mode_cnt: int | None,
+                 shmem_call_addr: int | None,
+                 shmem_hook_name: str | None
+                 ):
         super().__init__()
         self.inline_tracing = inline_tracing
         self.never_zero = never_zero
@@ -305,6 +339,8 @@ class AddAFLPlusPlusPass(Pass):
         self.init_forkserver: int = def_fuzz_addr
         self.pers_mode: int = pers_mode_addr
         self.pers_mode_cnt: int = pers_mode_cnt
+        self.shmem_call_addr: int = shmem_call_addr
+        self.shmem_hook_name: str = shmem_hook_name
         if not def_fuzz_addr:
             log.warning("No deferred fuzzing location; initialising at program entrypoint."
                         " For faster fuzzing, specify an initialisation point.")
@@ -374,13 +410,43 @@ class AddAFLPlusPlusPass(Pass):
             {ret}
         '''
 
-    def persistent_patch(self) -> Patch:
+    def call_sharedmem_hook(self):
+        '''
+        Call sharedmem hook after stack alignment
+        '''
+        return f'''
+            # stack align
+            mov     rcx, rsp
+            lea     rsp, [rsp - 0x80]
+            and     rsp, 0xfffffffffffffff0
+            push    rcx
+            push    rcx
+
+            # arg 1: saved registers
+            lea rdi, [rip+{REG_BACKUP_LABEL}]
+
+            # arg 2: testcase pointer
+            mov rsi, [rip+__afl_fuzz_ptr]
+
+            # arg 3: testcase length
+            mov rax, [rip+__afl_fuzz_len]
+            mov edx, [rax]
+            call {self.shmem_hook_name}
+
+            pop     rcx
+            mov     rsp, rcx
+        '''
+
+    def persistent_patch(self, call_shmem_hook: bool=False) -> Patch:
         '''
         Patch to insert in front of a function to repeatedly fuzz it.
         '''
-        backup_regs = LinuxX64Utils.backup_registers(PERS_REG_BACKUP_LABEL)
-        restore_regs = LinuxX64Utils.restore_registers(PERS_REG_BACKUP_LABEL)
+        backup_regs = LinuxX64Utils.backup_registers(REG_BACKUP_LABEL)
+        restore_regs = LinuxX64Utils.restore_registers(REG_BACKUP_LABEL)
         sharedmem_hook_call = ''
+        if call_shmem_hook:
+            sharedmem_hook_call = self.call_sharedmem_hook()
+
         persistent_mode_patch = Patch.from_function(lambda _: f'''
             # Backup all original registers
             {backup_regs}
@@ -494,11 +560,27 @@ class AddAFLPlusPlusPass(Pass):
                 )
                 instr_count += 1
 
-        # Add persistent mode patch
+        call_shm_hook_in_pers = self.shmem_call_addr and self.shmem_call_addr == self.pers_mode
+
+        # Add persistent mode patch + sharedmem hook if required
         if self.pers_mode:
             utils.insert_patch_at_address(
                 self.pers_mode,
-                self.persistent_patch(),
+                self.persistent_patch(call_shmem_hook=call_shm_hook_in_pers),
+                self.addr_cb_map,
+                rewriting_ctx
+            )
+
+        if self.shmem_call_addr and not call_shm_hook_in_pers:
+            # sharedmem hook is not being used with persistent mode
+            # insert it seperately
+            utils.insert_patch_at_address(
+                self.shmem_call_addr,
+                Patch.from_function(lambda _: f'''
+                    {LinuxX64Utils.backup_registers(REG_BACKUP_LABEL)}
+                    {self.call_sharedmem_hook()}
+                    {LinuxX64Utils.restore_registers(REG_BACKUP_LABEL)}
+                ''', Constraints(x86_syntax=X86Syntax.INTEL)),
                 self.addr_cb_map,
                 rewriting_ctx
             )
