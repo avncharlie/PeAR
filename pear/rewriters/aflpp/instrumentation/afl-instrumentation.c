@@ -42,8 +42,8 @@ extern u8 __afl_is_persistent;
 u8 first_pass = 1;
 u32 cycle_cnt;
 
-u32 *__afl_fuzz_len;
-u8 *__afl_fuzz_ptr;
+extern u32 *__afl_fuzz_len;
+extern u8 *__afl_fuzz_ptr;
 
 // new
 uint32_t __document_mutation_counter = 0;
@@ -253,7 +253,15 @@ void __afl_start_forkserver(void) {
 
     /* Phone home and tell the parent that we're OK. If parent isn't there,
        assume we're not running in forkserver mode and just execute program. */
-    if (write(FORKSRV_FD + 1, tmp, 4) != 4) { return; }
+    if (write(FORKSRV_FD + 1, tmp, 4) != 4) { 
+        if (__afl_sharedmem_fuzzing) {
+            fprintf(stderr, "This program is built to be fuzzed with AFL++ shared memory fuzzing, and cannot run without AFL++. Exiting now.\n");
+            exit(1);
+        } else if (__afl_is_persistent) {
+            fprintf(stderr, "Warning: this program is built to be fuzzed with AFL++'s persistent mode, yet it is running without AFL++. It probably won't work correctly! Use `kill %%1` to stop this program if it suspends itself.\n");
+        }
+        return;
+    }
 
     __afl_connected = 1;
 
@@ -268,13 +276,6 @@ void __afl_start_forkserver(void) {
                 (FS_OPT_ENABLED | FS_OPT_SHDMEM_FUZZ)) {
             // set up shared memory fuzzing
             __afl_map_shm_fuzz();
-        }
-
-        // Unsure why exactly this is needed when sharedmem fuzzing without
-        // persistent mode (except that it won't work without it)
-        // TODO: figure out
-        if (__afl_is_persistent) {
-            already_read_first = 1;
         }
     }
 

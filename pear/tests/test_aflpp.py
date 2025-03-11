@@ -20,12 +20,15 @@ from .conftest import linux_only, get_gen_binary_from_pear_output
 TEST_PROG_DIR = importlib.resources.files(__package__) / 'test_fuzz'
 AFLPP_TIMEOUT=20
 GENERIC_TARGET_FUNC_NAME='read_and_test_file'
+SHMEM_TARGET_FUNC_NAME='test'
 
 class TargetProgram(NamedTuple):
     name: str
     binary_path: str
     corpus: str
     target_func_name: str
+    shmem_hook_obj: str | None
+    shmem_target_func_name: str | None
 
 def prepare_generic_test_binary(prog_name: str,
                                 tmp_path_factory: pytest.TempPathFactory,
@@ -36,8 +39,9 @@ def prepare_generic_test_binary(prog_name: str,
         - There exists 'build_<ARCH>.sh' script in TEST_PROG_DIR/<PROG> to
           build the program for a specified architecture.
         - There exists a fuzzer corpus directory TEST_PROG_DIR/<PROG>/corpus.
-        - The program will export a function called GENERIC_TARGET_FUNC_NAME 
-          that will be the target fuzzing function.
+        - The program will export a function called GENERIC_TARGET_FUNC_NAME and
+          optionally additionally SHMEM_TARGET_FUNC_NAME that will be the
+          target fuzzing function (SHMEM_TARGET_FUNC_NAME for shmem fuzzing)
 
     See befunge and simple for examples.
 
@@ -59,11 +63,21 @@ def prepare_generic_test_binary(prog_name: str,
     bin_path = os.path.join(build_dir, f"{prog_name}{arch.name}")
     assert os.path.isfile(bin_path), "binary not found after build"
 
+    # check if sharedmem hook was built
+    hook_path = os.path.join(build_dir, f"hook{arch.name}.o")
+    shmem_hook_obj = None
+    shmem_target_func_name = None
+    if os.path.isfile(hook_path):
+        shmem_hook_obj = hook_path
+        shmem_target_func_name = SHMEM_TARGET_FUNC_NAME
+
     return TargetProgram(
         name=prog_name,
         binary_path=bin_path,
         corpus=os.path.join(build_dir, 'corpus'),
-        target_func_name=GENERIC_TARGET_FUNC_NAME
+        target_func_name=GENERIC_TARGET_FUNC_NAME,
+        shmem_hook_obj=shmem_hook_obj,
+        shmem_target_func_name=shmem_target_func_name
     )
 
 @pytest.fixture
@@ -113,7 +127,9 @@ def prepare_libxml2(tmp_path_factory: pytest.TempPathFactory) -> TargetProgram:
         name='xmllint',
         binary_path=str(bin_path),
         corpus=str(corpus),
-        target_func_name=XMLLINT_TARGET_FUNC
+        target_func_name=XMLLINT_TARGET_FUNC,
+        shmem_hook_obj=None,
+        shmem_target_func_name=None
     )
 
 @pytest.fixture
@@ -121,7 +137,7 @@ def prepare_test_program(request: pytest.FixtureRequest) -> TargetProgram:
     return request.getfixturevalue(request.param)
 
 def run_aflpp_test(inst_prog: str, corpus: str, afl_out: str,
-                   hide_afl_ui: bool) -> float:
+                   hide_afl_ui: bool, arg: str = '@@') -> float:
     '''Fuzz binary with AFL++ and return execs per second'''
     inst_prog = str(inst_prog)
     # Ignore the usual system config AFL wants you to set
@@ -131,7 +147,7 @@ def run_aflpp_test(inst_prog: str, corpus: str, afl_out: str,
     cmd = hide_ui + \
             ['AFL_SKIP_CPUFREQ=1', 'AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1',
              'timeout', str(AFLPP_TIMEOUT),
-             'afl-fuzz', '-i', corpus, '-o', afl_out, '--', inst_prog, '@@']
+             'afl-fuzz', '-i', corpus, '-o', afl_out, '--', inst_prog, arg]
     str_cmd = ' '.join(cmd)
     print(f'Fuzzing using cmd: {str_cmd}')
     os.system(str_cmd)
@@ -179,25 +195,56 @@ def test_aflpp_rewriter(
     binpath = test_prog.binary_path
     target_func = test_prog.target_func_name
     corpus = test_prog.corpus
+    shmem_target = test_prog.shmem_target_func_name
+    shmem_hook = test_prog.shmem_hook_obj
+    supports_shmem = shmem_target and shmem_hook
+
     def out_dir():
         return str(tmp_path_factory.mktemp('out'))
+
     ir_cache_arg = ''
     if ir_cache:
         ir_cache_arg = f'--ir-cache {ir_cache}'
+
+    recap = 'To recap:\n'
 
     # Test 1: deferred mode
     pear_cmd = f'{sys.executable} -m pear {ir_cache_arg} --input-binary {binpath} --output-dir {out_dir()} --gen-binary AFL++ --deferred-fuzz-function {target_func}'
     inst_prog = run_pear(pear_cmd)
     def_mode_execs = run_aflpp_test(inst_prog, corpus, out_dir(), hide_afl_ui)
-    print(f'Using deferred mode, fuzzed {progname} at {def_mode_execs} execs per sec.')
+    log = f'Using deferred mode, fuzzed {progname} at {def_mode_execs} execs per sec.'
+    print(log)
+    recap += log + '\n'
     
     # Test 2: deferred mode + persistent mode
     pear_cmd = f'{sys.executable} -m pear {ir_cache_arg} --input-binary {binpath} --output-dir {out_dir()} --gen-binary AFL++ --deferred-fuzz-function {target_func} --persistent-mode-function {target_func} --persistent-mode-count 2147483647'
     inst_prog = run_pear(pear_cmd)
     pers_mode_execs = run_aflpp_test(inst_prog, corpus, out_dir(), hide_afl_ui)
-    print(f'Using deferred+persistent mode, fuzzed {progname} at {pers_mode_execs} execs per sec.')
+    log = f'Using deferred+persistent mode, fuzzed {progname} at {pers_mode_execs} execs per sec.'
+    print(log)
+    recap += log + '\n'
 
-    print('\nTo recap:')
-    print(f'Using deferred mode, fuzzed {progname} at {def_mode_execs} execs per sec.')
-    print(f'Using deferred+persistent mode, fuzzed {progname} at {pers_mode_execs} execs per sec.')
+    shmem_mode_execs = -1
+    if supports_shmem:
+        # Pick example file we will invoke program with so it will get to the
+        # part we have our shmem hook that gives it the AFL++ testcase. We just 
+        # pick a corpus file.
+        example = os.path.join(corpus, os.listdir(corpus)[0]) 
 
+        # Test 3: deferred mode + shared memory fuzzing 
+        pear_cmd = f'{sys.executable} -m pear {ir_cache_arg} --input-binary {binpath} --output-dir {out_dir()} --gen-binary AFL++ --deferred-fuzz-function {shmem_target} --sharedmem-call-function {shmem_target} --sharedmem-obj {shmem_hook}'
+        inst_prog = run_pear(pear_cmd)
+        shmem_mode_execs = run_aflpp_test(inst_prog, corpus, out_dir(), hide_afl_ui, arg=example)
+        log = f'Using deferred+sharedmem mode, fuzzed {progname} at {shmem_mode_execs} execs per sec.'
+        print(log)
+        recap += log + '\n'
+
+        # Test 4: deferred mode + persistent mode + shared memory fuzzing 
+        pear_cmd = f'{sys.executable} -m pear {ir_cache_arg} --input-binary {binpath} --output-dir {out_dir()} --gen-binary AFL++ --deferred-fuzz-function {shmem_target} --persistent-mode-function {shmem_target} --persistent-mode-count 2147483647 --sharedmem-call-function {shmem_target} --sharedmem-obj {shmem_hook}'
+        inst_prog = run_pear(pear_cmd)
+        shmem_mode_execs = run_aflpp_test(inst_prog, corpus, out_dir(), hide_afl_ui, arg=example)
+        log = f'Using deferred+persistent+sharedmem mode, fuzzed {progname} at {shmem_mode_execs} execs per sec.'
+        print(log)
+        recap += log 
+
+    print(recap)

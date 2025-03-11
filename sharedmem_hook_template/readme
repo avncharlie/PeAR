@@ -1,0 +1,8 @@
+To build the example hook, run `gcc -c hook.c`.
+
+The resulting hook.o is what we pass to --sharedmem-obj. 
+An example PeAR invocation that applies deferred initialisation, persistent mode and shared memory fuzzing would look like:
+```
+$ ./PeAR.sh --ir-cache ./ir_cache --input-binary PROGRAM --output-dir out --gen-binary --ignore-nonempty AFL++ --deferred-fuzz-function test --persistent-mode-function test --persistent-mode-count 2147483647 --sharedmem-call-function test --sharedmem-obj hook.o
+```
+
