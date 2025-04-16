@@ -50,7 +50,9 @@ class BasicBlockInfo:
     start_address: int        # start execution address of block
     inst_offset: int          # offset from start of block to instrument
     size: int                 # size of block
-    str_repr: str             # string disassembly of block
+    disass: str               # string disassembly of block
+    label: str                # label of block (or '')
+    demangled_label: str      # demangled label of block (or '')
 
 class TraceRewriter(Rewriter):
     """
@@ -126,9 +128,11 @@ class TraceRewriter(Rewriter):
     def get_block_asm(self, 
                       func_map: dict[CodeBlock, str],
                       multi_entry_func_map: list[tuple[list[CodeBlock], str]],
-                      start_addr: int, ins: list[CsInsn], cb: CodeBlock) -> str:
-        """ Return dissasembly string of a CodeBlock """
-
+                      start_addr: int, ins: list[CsInsn], cb: CodeBlock) -> tuple[str, str]:
+        """
+        Return dissasembly string of a codeblock
+        Returns (disassembly, label)
+        """
         func_name = ''
         if cb in func_map:
             func_name = func_map[cb]
@@ -138,16 +142,16 @@ class TraceRewriter(Rewriter):
                     func_name = name
                     break
         if func_name != '':
-            func_name += ':\n'
+            func_name += ''
 
-        str_ins = func_name
+        str_ins = ''
         addr = start_addr
         for i in ins:
             str_ins += f"{hex(addr)}: {i.insn_name()} {i.op_str}\n"
             addr += i.size
-        return str_ins
+        return (str_ins, func_name)
 
-    def rewrite(self) -> gtirb.IR:
+    def generate_bbinfo(self) -> dict[CodeBlock, BasicBlockInfo]:
         # get functions
         functions: list[Function] = []
         has_functions = _auxdata.function_entries.exists(self.module) \
@@ -177,23 +181,34 @@ class TraceRewriter(Rewriter):
             for x in ins[:-1]:
                 inst_offset += x.size
 
+            disass, label = self.get_block_asm(func_map, multi_entry_func_map,
+                                               start_address, ins, cb)
+            demangled = utils.demangle(label)
+            if demangled == label:
+                demangled = ''
             block = BasicBlockInfo(
                 id = curr_id,
                 start_address = start_address,
                 inst_offset = inst_offset,
                 size = cb.size,
-                str_repr = self.get_block_asm(func_map, multi_entry_func_map, start_address, ins, cb)
+                disass = disass,
+                label = label,
+                demangled_label = demangled
             )
             cov_mapping[cb] = block
             curr_id += 1
 
-        self.cov_mapping = cov_mapping
+        # print(utils.demangle.cache_info())
+        return cov_mapping
+
+    def rewrite(self) -> gtirb.IR:
+        self.cov_mapping = self.generate_bbinfo()
 
         passes = []
         if self.print_execution:
-            passes = [AddExecutionPrinting(cov_mapping)]
+            passes = [AddExecutionPrinting(self.cov_mapping)]
         if self.add_coverage:
-            passes = [AddCoverageData(cov_mapping), AddCoverage(cov_mapping, self.fast, self.slow)]
+            passes = [AddCoverageData(self.cov_mapping), AddCoverage(self.cov_mapping, self.fast, self.slow)]
 
         for p in passes:
             manager = PassManager()
@@ -273,7 +288,12 @@ class AddExecutionPrinting(Pass):
         is_arm64 = module.isa == gtirb.Module.ISA.ARM64
 
         for cb, bbinfo in self.cov_mapping.items():
-            to_print = bbinfo.str_repr + "\n"
+            to_print = bbinfo.disass + "\n"
+            if bbinfo.demangled_label:
+                to_print = f'{bbinfo.demangled_label}:\n' + to_print
+            elif bbinfo.label:
+                to_print = f'{bbinfo.label}:\n' + to_print
+
             padding = 16 - (len(to_print) % 16)
             patch = None
 
