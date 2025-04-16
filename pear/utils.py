@@ -7,11 +7,12 @@ import shutil
 import logging
 import subprocess
 from typing import Optional
-from abc import ABC, abstractmethod
+from functools import lru_cache
 from collections import OrderedDict
 
 import gtirb
 import gtirb_rewriting._auxdata as _auxdata
+import cpp_demangle
 
 from gtirb import Module
 from gtirb.symbol import Symbol
@@ -28,6 +29,36 @@ log = logging.getLogger(__name__)
 from . import GEN_SCRIPT_OPTS
 from . import DUMMY_LIB_NAME
 DRY_RUN_WHITELIST = ['ddisasm', 'gtirb-pprinter']
+
+CPP_FILT_WARNING = False
+
+def cppfilt_demangle(mangled: str):
+    """
+    Attempt to demangle C++ name using c++filt tool from binutils.
+    Return original if not cpp name.
+    """
+    out, _ = run_cmd(['c++filt', mangled], should_print=False, log=False)
+    return out.decode().strip()
+
+@lru_cache(maxsize=None)
+def demangle(mangled: str):
+    """
+    Attempt to demangle C++ name using cpp_demangle python lib.
+    Return original if not cpp name
+    """
+    global CPP_FILT_WARNING
+    if not mangled.startswith('_Z'):
+        return mangled # probably not cpp name
+    try:
+        return cpp_demangle.demangle(mangled)
+    except ValueError:
+        if not shutil.which('c++filt'):
+            if not CPP_FILT_WARNING:
+                log.warning("c++filt not installed (install via binutils package) ... relying only on cpp_demangle to demangle")
+                CPP_FILT_WARNING = True
+            return mangled
+        # fallback to c++filt
+        return cppfilt_demangle(mangled)
 
 def is_pie(module: Module):
     binary_type = _auxdata.binary_type.get_or_insert(module)
@@ -68,6 +99,7 @@ def log_cmd(cmd: list[str],
 
 def run_cmd(cmd: list[str],
             check: Optional[bool]=True,
+            log: Optional[bool]=True,
             should_print: Optional[bool]=True,
             working_dir: Optional[str]=None,
             env_vars: Optional[dict]=None) -> tuple[bytes, int]:
@@ -77,13 +109,14 @@ def run_cmd(cmd: list[str],
 
     :param cmd: command to run.
     :param check: True if exception should be raised on command failure
-    :param print: True if command output should be printed
+    :param should_print: True if command output should be printed
     :param working_dir: Working directory command should be executed in. Will
         execute in current dir by default.
     :param env_vars: A dictionary of environment variables to set for the command.
     :returns: A tuple of (command output, return code)
     """
-    log_cmd(cmd, working_dir, env_vars)
+    if log:
+        log_cmd(cmd, working_dir, env_vars)
     if GEN_SCRIPT_OPTS.is_dry_run and cmd[0] not in DRY_RUN_WHITELIST:
         return b'', 0
     output = b""

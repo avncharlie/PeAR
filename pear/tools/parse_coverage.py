@@ -37,7 +37,11 @@ def parse_args():
 
 def print_execution(map: dict[int, BasicBlockInfo], coverage: list[int]):
     for id in coverage:
-        print(map[id].str_repr)
+        if map[id].demangled_label:
+            print(map[id].demangled_label + ':')
+        elif map[id].label:
+            print(map[id].label + ':')
+        print(map[id].disass)
 
 def generate_ezcov(map: dict[int, BasicBlockInfo], coverage: list[int],
                    output: str):
@@ -71,7 +75,9 @@ def main():
                 start_address = x['start_address'],
                 inst_offset = x['inst_offset'],
                 size = x['size'],
-                str_repr = x['str_repr']
+                disass = x['disass'],
+                label = x['label'],
+                demangled_label = x['demangled_label']
             )
             map[bbinfo.id] = bbinfo
 
