@@ -326,11 +326,11 @@ class AddAFLPlusPlusPass(Pass):
     """
     def __init__(self, inline_tracing: bool, never_zero: bool,
                  addr_cb_map: OrderedDict[int, uuid.UUID],
-                 def_fuzz_addr: int | None,
-                 pers_mode_addr: int | None,
-                 pers_mode_cnt: int | None,
-                 shmem_call_addr: int | None,
-                 shmem_hook_name: str | None
+                 def_fuzz_addr: Optional[int],
+                 pers_mode_addr: Optional[int],
+                 pers_mode_cnt: Optional[int],
+                 shmem_call_addr: Optional[int],
+                 shmem_hook_name: Optional[str]
                  ):
         super().__init__()
         self.inline_tracing = inline_tracing
