@@ -331,8 +331,11 @@ class LinuxUtils(ArchUtils):
         # Set stack size (most binaries this is zero, meaning set to default stack size)
         stack_size_cmd = ['-z', f'stack-size={stack_size}']
 
-        # Set pie or not
-        pie_cmd = ['-pie' if is_pie(ir.modules[0]) else '-no-pie']
+        # Set PIE or not
+        # For some reason using -no-pie often causes this error:
+        #   "ld: -pie: error: PHDR segment not covered by LOAD segment"
+        # Ommiting -pie creates non pie so we just do that
+        pie_cmd = ['-pie'] if is_pie(ir.modules[0]) else []
 
         # Link it all together
         binary_path = f'{output}.exe'
