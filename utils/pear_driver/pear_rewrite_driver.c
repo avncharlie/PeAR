@@ -10,16 +10,17 @@ __attribute__((weak)) int LLVMFuzzerInitialize(int *argc, char ***argv);
 static uint8_t AflInputBuf[kMaxAflInputSize];
 
 // Get testcase from stdin and execute
+// This will be the target func for persistent mode (no shmem)
 void __attribute__((noinline)) pear_driver_stdin_input(void) {
   size_t l = read(0, AflInputBuf, kMaxAflInputSize);
   LLVMFuzzerTestOneInput(AflInputBuf, l);
 }
 
-// Main just runs testcase from stdin
+// On startup, init then fuzz
+// If persistent mode will trigger a loop around pear_driver_stdin_input
 int main(int argc, char **argv) {
   if (LLVMFuzzerInitialize)
     LLVMFuzzerInitialize(&argc, &argv);
   pear_driver_stdin_input();
   return 0;
 }
-
