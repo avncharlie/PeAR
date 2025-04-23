@@ -76,6 +76,9 @@ class LinuxUtils(ArchUtils):
             # If we don't specify the size, the linker won't generate a COPY
             # relocation within the final generated binary
             # (which is needed for data references)
+            if size == 0:
+                size = 8
+                log.warning(f'Size of symbol "{name}" unknown, assuming it is 8 bytes.')
             ret += f'.size {name}, {size}\n'
             ret += f'{name}:\n.space {size}\n\n'
         return ret
