@@ -228,7 +228,7 @@ class AFLPlusPlusRewriter(Rewriter):
         obj_src_path = os.path.join(build_dir, 'afl-instrumentation.c')
         static_obj_fname = 'instrumentation.o'
         static_obj_path = os.path.join(working_dir, static_obj_fname)
-        cmd = ['gcc', '-c', '-o', static_obj_path, obj_src_path]
+        cmd = ['gcc', '-c', '-O3', '-o', static_obj_path, obj_src_path]
         run_cmd(cmd)
 
         if self.dry_run:
