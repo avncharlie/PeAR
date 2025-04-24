@@ -8,7 +8,6 @@
 void __pear_sharedmem_hook(struct x86_64_regs *regs, uint8_t *input_buf, uint32_t input_buf_len) {
     // Arg 1 (pointer to the buffer) is in rdi. So we memset this pointer to
     // clear existing input.
-    memset(regs->rdi, 0, kMaxAflInputSize);
     // Ensure we don't overflow buffer
     if (input_buf_len > kMaxAflInputSize)
         input_buf_len = kMaxAflInputSize;
