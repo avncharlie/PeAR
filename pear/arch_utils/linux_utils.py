@@ -202,6 +202,7 @@ class LinuxUtils(ArchUtils):
             run_cmd(cmd)
             if switch_data:
                 expand_arm64_switches(asm_fname, switch_data)
+            fix_riz_register(asm_fname)
             log.info(f'Generated assembly saved to: {asm_fname}')
 
         if not gen_binary:
@@ -761,6 +762,20 @@ def find_asm_subsequence(sequence: list[str], sub: list[str]) -> list[int]:
 
     return indices if j == len(sub) else []
 
+
+def fix_riz_register(asm_f):
+    '''
+    Sometimes gtirb-pprinter emits the psuedo-register RIZ in the generated asm,
+    which cannot actually be assembled.
+    Do a basic string replace to attempt to get rid of some of these usages.
+    '''
+    with open(asm_f) as f:
+        asm = f.read()
+    scalars = [1, 2, 4, 8]
+    for s in scalars:
+        asm = asm.replace(f'+RIZ*'+str(s)+']', ']')
+    with open(asm_f, 'w') as f:
+        f.write(asm)
 
 def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
     '''
