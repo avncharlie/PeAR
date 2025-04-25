@@ -277,6 +277,9 @@ class AddAFLPlusPlusDataPass(Pass):
                     .space 6
             """
 
+        # Symbol provided by instrumentation object (initialised to dummy map)
+        rewriting_ctx.get_or_insert_extern_symbol('__afl_area_ptr', DUMMY_LIB_NAME)
+
         rewriting_ctx.register_insert(
             SingleBlockScope(module.entry_point, BlockPosition.ENTRY),
             Patch.from_function(lambda _:f'''
@@ -286,8 +289,6 @@ class AddAFLPlusPlusDataPass(Pass):
                 .data
                 # Globals used by instrumentation object and patches
                 #   tracing
-                .globl __afl_area_ptr
-                __afl_area_ptr:   .quad 0
                 .globl __afl_prev_loc
                 __afl_prev_loc:   .quad 0
 

@@ -24,8 +24,9 @@
 
 //#define _AFL_DOCUMENT_MUTATIONS 1
 
-u8 *__afl_area_ptr_dummy;
-extern u8 *__afl_area_ptr;
+u8 __afl_area_ptr_dummy[0x10000];
+u8 *__afl_area_ptr = __afl_area_ptr_dummy;
+
 u32 __afl_debug;
 u32 __afl_already_initialized_shm;
 extern u32 __afl_prev_loc;
@@ -154,16 +155,6 @@ void __afl_map_shm(void) {
 
 /* Set up AFL (will be called at start of program) */
 void __afl_setup(void) {
-    // Set up dummy map so program can still run until forkserver initialised
-    __afl_area_ptr_dummy =  malloc(0x10000);
-
-    if (__afl_area_ptr_dummy == NULL) {
-        fprintf(stderr, "ERROR: malloc to setup dummy map failed\n");
-        _exit(1);
-    }
-
-    __afl_area_ptr = __afl_area_ptr_dummy;
-
     if (getenv("AFL_DEBUG")) {
         __afl_debug = 1;
         fprintf(stderr, "DEBUG: debug enabled\n");
