@@ -10,7 +10,7 @@ import pathlib
 import textwrap
 import argparse
 from types import CodeType
-from gtirb.block import CodeBlock
+from gtirb import Symbol, CodeBlock
 import gtirb_rewriting._auxdata as _auxdata
 
 from collections import OrderedDict
@@ -216,6 +216,24 @@ def preprocess_add_function_names(ir: gtirb.IR, func_names: str):
                 names_set += 1
     log.info(f"Set {names_set} function names using function map")
 
+# TODO make this a generic symbol renaming thing
+def preprocess_rename_data_symbols(ir: gtirb.IR, orig: list[str], repl: list[str]):
+    '''
+    Replace symbol names in orig with repl. Case insentive search
+    e.g. orig[X] -> repl[X]
+    '''
+    assert len(orig) == len(repl)
+    orig = [x.lower() for x in orig]
+    module = ir.modules[0]
+    elf_symbol_info: dict[Symbol, tuple[int, str, str, str, int]]
+    elf_symbol_info = _auxdata.elf_symbol_info.get_or_insert(module)
+    for sym, (_, symtype, binding, visibility, _) in elf_symbol_info.items():
+        name = sym.name
+        if binding == 'LOCAL' and visibility != 'HIDDEN' \
+                and symtype == 'OBJECT' and name.lower() in orig:
+            sym.name = repl[orig.index(name.lower())]
+            log.warning(f'Renaming data symbol "{name}" to "{sym.name}" to prevent issues on reassembly')
+
 if __name__ == "__main__":
     args = parse_args()
 
@@ -266,6 +284,16 @@ if __name__ == "__main__":
     # pre-process IR by recording given function names
     if args.func_names:
         preprocess_add_function_names(ir, args.func_names)
+    # pre-process IR by renaming symbols with the same name as Intel AVX512
+    #   opmask registers k0-k7 to kkX (e.g. k0 becomes kk0). To avoid issues
+    #   when regenerating
+    if ir.modules[0].file_format == gtirb.Module.FileFormat.ELF \
+            and ir.modules[0].isa == gtirb.Module.ISA.X64:
+        orig = [f'k{x}' for x in range(8)]
+        repl = [f'kk{x}' for x in range(8)]
+        preprocess_rename_data_symbols(ir, orig, repl)
+        # offset is special keyword for gcc
+        preprocess_rename_data_symbols(ir, ['offset'], ['_offset'])
 
     # Run chosen rewriter
     rewriter: Rewriter = args.rewriter(ir, args, mappings, args.gen_build_script)
