@@ -3,6 +3,9 @@
 # runs gtirb-pprinter via docker
 # assumes command format: gtirb-pprinter INPUT_FILE [OPTIONS]... OUTPUT_FILE
 
+USER_ID=$(id -u)
+GROUP_ID=$(id -g)
+
 if [ "$#" -lt 2 ]; then
     echo "Usage: $0 INPUT_FILE [OPTIONS]... OUTPUT_FILE"
     exit 1
@@ -22,6 +25,7 @@ options="${@:2:$(($#-2))}"
 
 # Run the Docker command
 docker run --rm -it \
+    --user "$USER_ID:$GROUP_ID" \
     -v "$input_basedir":/input \
     -v "$output_basedir":/output \
     grammatech/ddisasm gtirb-pprinter input/"$input_basename" $options output/"$output_basename"
