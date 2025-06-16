@@ -769,12 +769,13 @@ def fix_riz_register(asm_f):
     which cannot actually be assembled.
     Do a basic string replace to attempt to get rid of some of these usages.
     '''
-    with open(asm_f) as f:
+    with open(asm_f, 'rb') as f:
         asm = f.read()
     scalars = [1, 2, 4, 8]
     for s in scalars:
-        asm = asm.replace(f'+RIZ*'+str(s)+']', ']')
-    with open(asm_f, 'w') as f:
+        rep = ('+RIZ*'+str(s)+']').encode()
+        asm = asm.replace(rep, b']')
+    with open(asm_f, 'wb') as f:
         f.write(asm)
 
 def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
