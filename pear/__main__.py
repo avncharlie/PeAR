@@ -23,31 +23,33 @@ from . import REWRITERS, REWRITER_MAP, GEN_SCRIPT_OPTS
 from .rewriters.rewriter import Rewriter
 from .arch_utils.linux_utils import fix_arm64_switches
 
-# TODO: remove this color stuff
-green = '\033[92m'
-blue = '\033[94m'
-yellow = '\033[93m'
-red = '\033[91m'
-magenta = '\033[95m'
-end = '\033[0m'
-
-class CustomFormatter(logging.Formatter):
-    LEVEL_COLORS = {
-        logging.INFO: blue,
-        logging.WARNING: yellow,
-        logging.ERROR: red,
-        logging.CRITICAL: magenta,
-    }
-    def format(self, record):
-        color = self.LEVEL_COLORS.get(record.levelno, '')
-        log_msg = f"{color}{record.levelname} - {record.name} - {record.msg}{end}"
-        return log_msg
-handler = logging.StreamHandler(sys.stdout)
-formatter = CustomFormatter("%(levelname)s - %(name)s - %(message)s")
-handler.setFormatter(formatter)
 log = logging.getLogger(__package__)
-log.setLevel(logging.INFO)
-log.addHandler(handler)
+
+def setup_logger(log):
+    # TODO: remove this color stuff
+    green = '\033[92m'
+    blue = '\033[94m'
+    yellow = '\033[93m'
+    red = '\033[91m'
+    magenta = '\033[95m'
+    end = '\033[0m'
+
+    class CustomFormatter(logging.Formatter):
+        LEVEL_COLORS = {
+            logging.INFO: blue,
+            logging.WARNING: yellow,
+            logging.ERROR: red,
+            logging.CRITICAL: magenta,
+        }
+        def format(self, record):
+            color = self.LEVEL_COLORS.get(record.levelno, '')
+            log_msg = f"{color}{record.levelname} - {record.name} - {record.msg}{end}"
+            return log_msg
+    handler = logging.StreamHandler(sys.stdout)
+    formatter = CustomFormatter("%(levelname)s - %(name)s - %(message)s")
+    handler.setFormatter(formatter)
+    log.setLevel(logging.INFO)
+    log.addHandler(handler)
 
 def main_descriptions():
     return '''\
@@ -235,6 +237,7 @@ def preprocess_rename_data_symbols(ir: gtirb.IR, orig: list[str], repl: list[str
             log.warning(f'Renaming data symbol "{name}" to "{sym.name}" to prevent issues on reassembly')
 
 if __name__ == "__main__":
+    setup_logger(log)
     args = parse_args()
 
     # Generate (and cache) IR if binary provided
