@@ -1,23 +1,51 @@
 #!/bin/sh
 
 # runs ddisasm via docker
-# assumes command format: ddisasm INPUT_FILE OPTION OUTPUT_FILE
+# supports optional: --hints <file>
+# assumes command format:
+#   ddisasm INPUT_FILE [--hints HINTS_FILE] OPTION OUTPUT_FILE
 
 USER_ID=$(id -u)
 GROUP_ID=$(id -g)
 
-if [ "$#" -ne 3 ]; then
-    docker run --rm -it --user "$USER_ID:$GROUP_ID" -v "$(pwd)":/workspace grammatech/ddisasm ddisasm "$@"
+# If less than 3 args, pass directly (interactive mode)
+if [ "$#" -lt 3 ]; then
+    docker run --rm -it \
+        --user "$USER_ID:$GROUP_ID" \
+        -v "$(pwd)":/workspace \
+        grammatech/ddisasm ddisasm "$@"
     exit
 fi
 
+# Extract main args
 input_full_path=$(realpath "$1")
 input_basedir=$(dirname "$input_full_path")
 input_basename=$(basename "$input_full_path")
 
-output_full_path=$(realpath "$3")
+# Check for --hints
+hints_mount=""
+hints_arg=""
+shift 1
+if [ "$1" = "--hints" ]; then
+    hints_full_path=$(realpath "$2")
+    hints_basedir=$(dirname "$hints_full_path")
+    hints_basename=$(basename "$hints_full_path")
+    hints_mount="-v $hints_basedir:/hints"
+    hints_arg="--hints /hints/$hints_basename"
+    shift 2
+fi
+
+# Now $1 is the option (e.g., --ir), $2 is output file
+option="$1"
+output_full_path=$(realpath "$2")
 output_basedir=$(dirname "$output_full_path")
 output_basename=$(basename "$output_full_path")
 
-docker run --rm -it --user "$USER_ID:$GROUP_ID" -v "$input_basedir":/input -v "$output_basedir":/output grammatech/ddisasm ddisasm input/"$input_basename" "$2" output/"$output_basename"
+docker run --rm -it \
+    --user "$USER_ID:$GROUP_ID" \
+    -v "$input_basedir":/input \
+    -v "$output_basedir":/output \
+    $hints_mount \
+    grammatech/ddisasm \
+    ddisasm /input/"$input_basename" $hints_arg "$option" /output/"$output_basename"
 
