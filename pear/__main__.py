@@ -121,6 +121,14 @@ Hint: running a docker container? Check volume mount location')
         help="Ignore nonempty output directory."
     )
     optional.add_argument(
+        '--hints', required=False, type=path_exists,
+        help=textwrap.dedent('''\
+            Hint file to use with ddisasm.
+            See https://github.com/GrammaTech/ddisasm/blob/main/doc/source/GENERAL/5-AdvancedUsage.md
+            for details.
+        ''')
+    )
+    optional.add_argument(
         '--gen-binary', action='store_true', required=False,
         help=textwrap.dedent('''\
             Build instrumented binary. Requires gtirb-pprinter and build tools
@@ -247,7 +255,8 @@ if __name__ == "__main__":
         ddisasm(
             args.input_binary,
             ir_file,
-            ir_cache=args.ir_cache
+            ir_cache=args.ir_cache,
+            hints=args.hints if args.hints else None
         )
         args.input_ir = ir_file
 

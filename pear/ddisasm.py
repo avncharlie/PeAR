@@ -25,13 +25,14 @@ def md5(fname: str) -> str:
 
 
 def ddisasm(binary: str, output: str, ir_cache: Optional[str]=None,
-            hide: Optional[bool]=False):
+            hints: Optional[str]=None, hide: Optional[bool]=False):
     """
     Generate GTIRB IR of binary using ddisasm. Use cache if specified.
 
     :param binary: File location of input binary
     :param output: File location of output IR
     :param ir_cache: Location of IR cache
+    :param hints: Hints file to pass to ddisasm
     :param hide: True to hide output
     """
 
@@ -46,13 +47,19 @@ def ddisasm(binary: str, output: str, ir_cache: Optional[str]=None,
             if entry == cache_fname:
                 # found. copy cached IR to output location
                 log.info("Found IR in cache")
+                if hints:
+                    log.warning("ir cache does not cache hints file, remove cached ir if hints have changed.")
                 shutil.copy(os.path.join(ir_cache, entry), output)
                 return
 
     # disassemble binary
     assert check_executables_exist(['ddisasm']), "ddisasm not found"
     cmd = ["ddisasm", binary, "--ir", output]
+    if hints:
+        cmd = ["ddisasm", binary, "--hints", hints, "--ir", output]
     run_cmd(cmd, should_print=not hide)
+    if hints:
+        log.warning("ir cache does not cache hints file, remove cached ir if hints change.")
 
     assert os.path.isfile(output), "ddisasm failed to produce output IR"
 
