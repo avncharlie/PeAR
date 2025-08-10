@@ -1,9 +1,9 @@
 #!/bin/sh
 
 # runs ddisasm via docker
-# supports optional: --hints <file>
+# supports optional: --hints <file>, --debug-dir <dir>
 # assumes command format:
-#   ddisasm INPUT_FILE [--hints HINTS_FILE] OPTION OUTPUT_FILE
+#   ddisasm INPUT_FILE [--hints HINTS_FILE] [--debug-dir DIR] OPTION OUTPUT_FILE
 
 USER_ID=$(id -u)
 GROUP_ID=$(id -g)
@@ -22,18 +22,40 @@ input_full_path=$(realpath "$1")
 input_basedir=$(dirname "$input_full_path")
 input_basename=$(basename "$input_full_path")
 
-# Check for --hints
+# Optionals
 hints_mount=""
 hints_arg=""
+debug_mount=""
+debug_arg=""
+
 shift 1
-if [ "$1" = "--hints" ]; then
-    hints_full_path=$(realpath "$2")
-    hints_basedir=$(dirname "$hints_full_path")
-    hints_basename=$(basename "$hints_full_path")
-    hints_mount="-v $hints_basedir:/hints"
-    hints_arg="--hints /hints/$hints_basename"
-    shift 2
-fi
+
+# Parse optionals in any order while leaving final 2 args (option, output)
+while [ "$#" -gt 2 ]; do
+    case "$1" in
+        --hints)
+            hints_full_path=$(realpath "$2")
+            hints_basedir=$(dirname "$hints_full_path")
+            hints_basename=$(basename "$hints_full_path")
+            hints_mount="-v \"$hints_basedir\":/hints"
+            hints_arg="--hints /hints/$hints_basename"
+            shift 2
+            ;;
+        --debug-dir)
+            debug_full_path=$(realpath "$2")
+            if [ ! -d "$debug_full_path" ]; then
+                echo "ERROR: --debug-dir expects an existing directory" >&2
+                exit 1
+            fi
+            debug_mount="-v \"$debug_full_path\":/debug"
+            debug_arg="--debug-dir /debug"
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 # Now $1 is the option (e.g., --ir), $2 is output file
 option="$1"
@@ -41,11 +63,12 @@ output_full_path=$(realpath "$2")
 output_basedir=$(dirname "$output_full_path")
 output_basename=$(basename "$output_full_path")
 
+# shellcheck disable=SC2086
 docker run --rm -it \
     --user "$USER_ID:$GROUP_ID" \
     -v "$input_basedir":/input \
     -v "$output_basedir":/output \
-    $hints_mount \
+    $(eval echo $hints_mount) \
+    $(eval echo $debug_mount) \
     grammatech/ddisasm \
-    ddisasm /input/"$input_basename" $hints_arg "$option" /output/"$output_basename"
-
+    ddisasm /input/"$input_basename" $hints_arg $debug_arg "$option" /output/"$output_basename"
