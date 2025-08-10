@@ -147,6 +147,14 @@ def diff_ranges(r1, r2, default="unknown"):
 
     return diffs
 
+def get_ordered_syms(ir):
+    real_symbols = filter(
+                    lambda x: not x.name.startswith(".L") \
+                        and x._payload is not None \
+                        and hasattr(x._payload, "address") \
+                        and x._payload.address is not None,
+                    ir.symbols)
+    return sorted(list(real_symbols), key=lambda x: x._payload.address)
 
 def main():
     setup_logger(log)
@@ -241,8 +249,18 @@ def main():
           "========================= DISAGREEMENTS ========================="
           f"{RESET}")
 
+    syms = get_ordered_syms(ir)
+
     for lo, hi, gk, dk in mismatches:
-        # header colour: who thinks it’s code?
+        # find nearest symbols
+        previous_sym = None
+        next_sym = None
+        for x in syms:
+            if x._payload.address > lo:
+                next_sym = x
+                break
+            previous_sym = x
+
         if gk == "data" and dk == "code":
             hdr = FG["mag"]                                  # DDisasm flags code
         elif gk == "code" and dk == "data":
@@ -250,7 +268,11 @@ def main():
         else:
             hdr = FG["wht"]
 
-        header = f"{hdr}{hex(lo)}–{hex(hi)}{RESET}: Ghidra={gk}, DDisasm={dk}\n"
+        header = f"{hdr}{hex(lo)} – {hex(hi)}{RESET}: Ghidra={gk}, DDisasm={dk}\n"
+        header += f"Previous symbol: {previous_sym.name} @ {hex(previous_sym._payload.address)} (+{lo - previous_sym._payload.address})"
+        if next_sym:
+            header += f", Next symbol: {next_sym.name} @ {hex(next_sym._payload.address)}"
+        header += "\n"
         to_print = header
 
         if gk == "data" and dk == "code":
@@ -290,56 +312,6 @@ def main():
 
     if is_pie(ir.modules[0]):
         print(f'Base address in Ghidra: {hex(base_addr)}')
-
-
-
-
-    # print("\n\n========================= DISAGREEMENTS =========================")
-    # for lo, hi, gk, dk in mismatches:
-    #     to_print = f"{hex(lo)}–{hex(hi)}: Ghidra={gk}, DDisasm={dk}\n"
-
-    #     if gk == 'data' and dk == 'code':
-    #         found = False
-    #         all_nop = True
-    #         
-    #         blocks = ir.byte_blocks_at(lo if lo == hi else range(lo, hi))
-    #         for block in blocks:
-    #             found = True
-    #             insns = decoder.get_instructions(block)
-    #             for i in insns:
-    #                 to_print += f'{hex(i.address)}: {i.insn_name()} {i.op_str}\n'
-    #                 if i.insn_name() != 'nop':
-    #                     all_nop = False
-
-    #         if all_nop:
-    #             nop_counter += 1
-
-    #         if not found:
-    #             print(len(list(ir.byte_blocks_at(range(lo, hi)))))
-    #             print(len(list(ir.byte_blocks_at(lo))))
-    #             print(to_print + "Ddisasm code block not found\n")
-
-    #         if not all_nop:
-    #             print(to_print)
-    #     elif gk == 'code' and dk == 'data':
-    #         if lo >= plt_start and hi <= plt_end:
-    #             plt_counter += 1
-    #         else:
-    #             print(to_print)
-    #     else:
-    #         print(to_print)
-
-    # print(f"Total NOP conflicts hidden: {nop_counter}")
-    # print(f"Total conflicts within PLT hidden: {plt_counter}")
-
-'''
-
-TODO:
-  1. filter to .text 
-  2. remove extraneous ones (e.g. ghidra things a NOP is data)
-        use capstone to figure out if ddisasm code is NOP and if ghidra says its data SKIP
-
-'''
 
 if __name__ == "__main__":
     main()
