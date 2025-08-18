@@ -177,30 +177,29 @@ class AddWinAFLDataPass(Pass):
 
     def begin_module(self, module, functions, rewriting_ctx):
         size = '4'
-        r = 'eax'
-        rel = ''
+        size_dir = '.long'
         p_mode_size = '0x100'
         if self.is_64bit:
             size = '8'
-            r = 'rax'
-            rel = 'rip + '
+            size_dir = '.quad'
             p_mode_size = '0x170'
 
         rewriting_ctx.register_insert(
             SingleBlockScope(module.entry_point, BlockPosition.ENTRY),
             Patch.from_function(lambda _:f'''
-                # Load address of __afl_area into __afl_area_ptr (idk how to do
-                # this in its definition)
-                push {r}
-                lea {r}, [{rel}__afl_area]
-                mov [{rel}__afl_area_ptr], {r}
-                pop {r}
+                # GTIRB patches need to have at least instruction in them
+                nop
+                nop
+                nop
+                nop
 
                 .section SYZYAFL
                 __tls_index: .space {size}
                 __tls_slot_offset: .space {size}
                 __afl_prev_loc: .space {size}
-                __afl_area_ptr: .space {size}
+                __afl_area_ptr:
+                    {size_dir} __afl_area
+
                 __afl_area: .space 0x10000
 
                 .section .data
