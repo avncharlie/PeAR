@@ -7,6 +7,8 @@ from .arch_utils import ArchUtils
 from ..utils import run_cmd, check_executables_exist
 from .. import DUMMY_LIB_NAME
 
+import gtirb_rewriting._auxdata as _auxdata
+
 log = logging.getLogger(__name__)
 
 class WindowsUtils(ArchUtils):
@@ -17,32 +19,44 @@ class WindowsUtils(ArchUtils):
         return True
 
     @staticmethod
-    def generate_def_file(ir: gtirb.IR, out_folder: str,
-                        ignore_dlls: Optional[list[str]]=None) -> dict[str, str]:
+    def is_sharedlib(ir: gtirb.IR) -> bool:
+        assert len(ir.modules) == 1
+        binary_type = _auxdata.binary_type.get_or_insert(ir.modules[0])
+        return 'DLL' in binary_type
+
+    @staticmethod
+    def subsystem(ir: gtirb.IR) -> bool:
+        '''
+        What to pass to /SUBSYSTEM: when linking binary
+        :param ir: ir to check
+        :returns: string to pass to SUBSYSTEM linker flag
+        '''
+        assert len(ir.modules) == 1
+        binary_type = _auxdata.binary_type.get_or_insert(ir.modules[0])
+        _, _, subsystem = binary_type
+        if subsystem == 'WINDOWS_CUI':
+            return 'console'
+        elif subsystem == 'WINDOWS_GUI':
+            return 'windows'
+        else:
+            msg = f'Unknown binary subsystem type {subsystem}'
+            log.error(msg)
+            raise ValueError(msg)
+
+    @staticmethod
+    def generate_def_files(exports: dict[str, list[str]],
+                           out_folder: str) -> dict[str, str]:
         """
-        Generate '.def' file for lib.exe to use to generate a '.lib' file declaring
-        functions from external dlls used in IR. The generated lib file is used
-        when linking the pretty printed assembly to these dlls.
+        Generate '.def' files for lib.exe to use to generate '.lib' files
+        declaring functions exported from dlls.
 
         Output files will be generated to: {out_folder}/{dllname}.def
             e.g. for KERNEL32.dll: {out_folder}/KERNEL32.dll.def
 
-        :param ir: GTIRB IR being def file being generated for
+        :param exports: { 'library_name': ['exportfunc1', 'exportfunc2', ...] }
         :param out_folder: Path of output folder.
-        :param ignore_dlls: Names of dlls to ignore generating def files for
         :returns: mapping of dll names to their generated def files
         """
-        if not ignore_dlls:
-            ignore_dlls = []
-
-        exports = {}
-        for module in ir.modules:
-            for _, _, func_name, lib in module.aux_data['peImportEntries'].data:
-                if lib not in ignore_dlls:
-                    if lib not in exports:
-                        exports[lib] = []
-                    exports[lib].append(func_name)
-
         def_file_mappings = {}
 
         for lib in exports:
@@ -63,6 +77,52 @@ class WindowsUtils(ArchUtils):
             log.info(f"Generated DEF file for {lib} at: {out_fname}")
 
         return def_file_mappings
+
+    @staticmethod
+    def generate_import_defs(ir: gtirb.IR, out_folder: str,
+                        ignore_dlls: Optional[list[str]]=None) -> dict[str, str]:
+        """
+        Generate definition files declaring functions imported from external
+        dlls in IR.  The generated lib file created from the the def is used
+        to link the pretty printed assembly to these dlls.
+
+        :param ir: GTIRB IR for which import def file being generated for
+        :param out_folder: Path of output folder.
+        :param ignore_dlls: Names of dlls to ignore generating def files for
+        :returns: mapping of dll names to their generated def files
+        """
+        if not ignore_dlls:
+            ignore_dlls = []
+
+        exports = {}
+        for module in ir.modules:
+            for _, _, func_name, lib in module.aux_data['peImportEntries'].data:
+                if lib not in ignore_dlls:
+                    if lib not in exports:
+                        exports[lib] = []
+                    exports[lib].append(func_name)
+
+        return WindowsUtils.generate_def_files(exports, out_folder)
+
+    @staticmethod
+    def generate_export_defs(ir: gtirb.IR, out_folder: str):
+        """
+        Generate definition file declaring functions exported from current IR,
+        if any exports exist.
+
+        :param ir: GTIRB IR of DLL def file is being generated for
+        :param out_folder: Path of output folder.
+        :returns: mapping of dll names to their generated def files
+        """
+        assert len(ir.modules) == 1
+        module = ir.modules[0]
+        export_funcs = []
+        for _, _, func_name in module.aux_data['peExportEntries'].data:
+            export_funcs.append(func_name)
+        if export_funcs:
+            exports = {module.name: export_funcs}
+            return WindowsUtils.generate_def_files(exports, out_folder)
+        return {}
 
     @staticmethod
     def asm_fix_lib_names(asm: str, def_files: dict[str, str]) -> str:
@@ -156,8 +216,11 @@ class WindowsUtils(ArchUtils):
             "At least one of gen_assembly or gen_binary must be true"
 
         # Generate def files to use for linking dlls in final binary 
-        def_files = WindowsUtils.generate_def_file(ir, working_dir,
+        import_defs = WindowsUtils.generate_import_defs(ir, working_dir,
                                                    ignore_dlls=[DUMMY_LIB_NAME])
+        # Also generate def file for exports of current file
+        export_defs = WindowsUtils.generate_export_defs(ir, working_dir)
+        def_files = import_defs | export_defs
 
         # If given existing assembly to generate from, assume it has already
         # been modified from a previous tool
@@ -206,13 +269,15 @@ class WindowsUtils(ArchUtils):
         cmd = [ml, r'/nologo', r'/c', fr'/Fo{obj_path}', f'{asm_fname}']
         run_cmd(cmd)
 
-        # Generate executable, linking in files if needed
-        binary_name = f'{basename}.exe'
-        binary_path = os.path.join(working_dir, f'{basename}.exe')
+        # Generate executable/dll, linking in files if needed
+        binary_name = f'{basename}.dll' if WindowsUtils.is_sharedlib(ir) else f'{basename}.exe'
+        binary_path = os.path.join(working_dir, binary_name)
         if obj_link == None:
             obj_link = []
         entrypoint = r'/ENTRY:__EntryPoint' if is_64bit else r'/ENTRY:_EntryPoint'
-        cmd = ["cl", r'/nologo', f'{obj_name}', fr'/Fe{binary_name}', r'/link'] + obj_link + [entrypoint, r'/SUBSYSTEM:console']
+        subsystem = WindowsUtils.subsystem(ir)
+        dll = ['/DLL'] if WindowsUtils.is_sharedlib(ir) else []
+        cmd = ["cl", r'/nologo', f'{obj_name}', fr'/Fe{binary_name}', r'/link'] + obj_link + [entrypoint, f'/SUBSYSTEM:{subsystem}'] + dll
         run_cmd(cmd, working_dir=working_dir)
 
         log.info(f'Generated binary saved to: {binary_path}')

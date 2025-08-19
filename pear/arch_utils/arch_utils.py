@@ -18,6 +18,15 @@ class ArchUtils:
         raise NotImplementedError
 
     @staticmethod
+    def is_sharedlib(ir: gtirb.IR) -> bool:
+        '''
+        Check if IR is a shared library
+        :param ir: IR to check.
+        :return: True if sharedlib
+        '''
+        raise NotImplementedError
+
+    @staticmethod
     def backup_registers(label: str) -> str:
         '''
         Generate asm for backing up registers to given label

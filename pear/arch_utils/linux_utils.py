@@ -15,7 +15,6 @@ from gtirb.offset import Offset
 from gtirb.symbolicexpression import SymAddrConst, SymAddrAddr, SymbolicExpression
 import gtirb_rewriting._auxdata as _auxdata
 from gtirb_capstone.instructions import GtirbInstructionDecoder
-import gtirb_rewriting._auxdata as _auxdata
 
 from .arch_utils import ArchUtils
 from .windows_utils import WindowsX64Utils
@@ -43,6 +42,12 @@ class LinuxUtils(ArchUtils):
         assert check_executables_exist(['gcc', 'ld']), \
             "GCC build tools not found"
         return True
+
+    @staticmethod
+    def is_sharedlib(ir: gtirb.IR) -> bool:
+        assert len(ir.modules) == 1
+        binary_type = _auxdata.binary_type.get_or_insert(ir.modules[0])
+        return 'SHARED' in binary_type
 
     @staticmethod
     def backup_registers(label: str) -> str:
