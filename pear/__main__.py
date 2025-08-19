@@ -21,7 +21,7 @@ from .utils import is_pie, get_address_to_byteblock_mappings
 from .ddisasm import ddisasm
 from . import REWRITERS, REWRITER_MAP, GEN_SCRIPT_OPTS
 from .rewriters.rewriter import Rewriter
-from .arch_utils.linux_utils import fix_arm64_switches
+from .arch_utils.linux_utils import fix_arm64_switches, LinuxUtils
 
 log = logging.getLogger(__package__)
 
@@ -264,7 +264,8 @@ if __name__ == "__main__":
     basename = os.path.basename(args.input_ir)
     if basename.endswith('.gtirb'):
         basename = basename[:-len('.gtirb')]
-    outname = (basename + '.' + args.rewriter.name()).replace('.exe', '')
+    outname = (basename + '.' + args.rewriter.name())\
+        .replace('.exe', '').replace('.dll', '')
 
     # load IR and generate mappings
     start_t = time.time()
@@ -272,6 +273,13 @@ if __name__ == "__main__":
     mappings = get_address_to_byteblock_mappings(ir)
     diff = round(time.time()-start_t, 3)
     log.info(f'IR loaded in {diff} seconds')
+
+    # Check not linux shared library
+    if ir.modules[0].file_format == gtirb.Module.FileFormat.ELF \
+            and LinuxUtils.is_sharedlib(ir):
+        log.error('Linux shared library regeneration not implemented yet -'
+                    + ' please raise this as an issue on Github')
+        exit(1)
 
     # Set build script output file if dry run
     build_script = ''
