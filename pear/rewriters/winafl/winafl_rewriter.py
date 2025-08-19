@@ -7,6 +7,7 @@ import random
 import shutil
 import pathlib
 import logging
+import textwrap
 import argparse
 import importlib
 
@@ -73,6 +74,14 @@ class WinAFLRewriter(Rewriter):
         )
 
         optional.add_argument(
+            '--no-persistent-mode', action='store_true', required=False,
+            help=textwrap.dedent('''\
+                Don't add code to repeatedly re-trigger target function. Assumes
+                you are doing this yourself somehow.
+            ''')
+        )
+
+        optional.add_argument(
             '--extra-link-libs', required=False, nargs='+',
             help="Extra libraries to link to final executable",
             metavar=("LIB1", "LIB2")
@@ -86,6 +95,7 @@ class WinAFLRewriter(Rewriter):
                  mappings: OrderedDict[int, uuid.UUID], dry_run: bool):
         self.ir = ir
         self.target_func: int = args.target_func
+        self.no_pers_mode: int = args.no_persistent_mode
         self.mappings = mappings
 
         # convert relative library paths to absolute paths
@@ -124,7 +134,7 @@ class WinAFLRewriter(Rewriter):
             # in other passes.
             AddWinAFLDataPass(self.is_64bit), 
             AddWinAFLPass(self.mappings, self.target_func, self.is_64bit,
-                          self.ignore_funcs)
+                          self.ignore_funcs, not self.no_pers_mode)
         ]
         # gtirb-rewriting's pass manager is bugged and can only handle running
         # one pass at a time.
@@ -263,7 +273,7 @@ class WinAFL64TrampolinePatch(Patch):
 
 class AddWinAFLPass(Pass):
     def __init__(self, mappings: OrderedDict[int, uuid.UUID], target_func: int,
-                 is_64bit: bool, ignore_funcs: list[int]):
+                 is_64bit: bool, ignore_funcs: list[int], persistent: bool):
         """
         Insert AFL instrumentation.
         Adds block tracing code to all functions, and persistent fuzzing loop to
@@ -272,12 +282,15 @@ class AddWinAFLPass(Pass):
         :param mappings: dictionary of addresses to codeblock UUIDs
         :param target_func: address of function to add main fuzzer loop to
         :param is_64bit: true if binary is 64 bit
+        :param ignore_funcs: functions to ignore
+        :param persistent: if we should apply persistent mode
         """
         super().__init__()
         self.mappings = mappings
         self.target_func = target_func
         self.is_64bit = is_64bit
         self.ignore_funcs = ignore_funcs
+        self.persistent = persistent
 
     def persistent_patch_x32(self):
         backup_regs = WindowsX86Utils.backup_registers('p_mode_reg_backup')
@@ -324,6 +337,41 @@ class AddWinAFLPass(Pass):
             {restore_regs}
         ''', Constraints(x86_syntax=X86Syntax.INTEL))
         return persistent_mode_patch
+
+    def non_persistent_patch_x64(self):
+        backup_regs = WindowsX64Utils.backup_registers('p_mode_reg_backup')
+        restore_regs = WindowsX64Utils.restore_registers('p_mode_reg_backup')
+        non_persistent_mode_patch = Patch.from_function(lambda _: f'''
+            # Backup all original registers
+            {backup_regs}
+
+            mov     rcx, rsp
+            lea     rsp, [rsp - 0x80]
+            and     rsp, 0xfffffffffffffff0
+            push    rcx
+            push    rcx
+
+            call __afl_persistent_loop
+
+            pop     rcx
+            mov     rsp, rcx
+
+            .Lstart_func:
+            {restore_regs}
+        ''', Constraints(x86_syntax=X86Syntax.INTEL))
+        return non_persistent_mode_patch
+
+    def non_persistent_patch_x32(self):
+        backup_regs = WindowsX86Utils.backup_registers('p_mode_reg_backup')
+        restore_regs = WindowsX86Utils.restore_registers('p_mode_reg_backup')
+        non_persistent_mode_patch = Patch.from_function(lambda _: f'''
+            # Backup all original registers
+            {backup_regs}
+            call __afl_persistent_loop
+            .Lstart_func:
+            {restore_regs}
+        ''', Constraints(x86_syntax=X86Syntax.INTEL))
+        return non_persistent_mode_patch
 
     def persistent_patch_x64(self):
         backup_regs = WindowsX64Utils.backup_registers('p_mode_reg_backup')
@@ -383,18 +431,33 @@ class AddWinAFLPass(Pass):
     def begin_module(self, module, functions, rewriting_ctx):
         # Setup persistence patch (loops the target function)
         rewriting_ctx.get_or_insert_extern_symbol('__afl_persistent_loop', DUMMY_LIB_NAME)
-        if self.is_64bit:
-            persistent_patch = self.persistent_patch_x64()
-        else:
-            persistent_patch = self.persistent_patch_x32()
 
-        # Add persistence handler to target function
-        utils.insert_patch_at_address(
-            self.target_func,
-            persistent_patch,
-            self.mappings,
-            rewriting_ctx
-        )
+        if self.persistent:
+            if self.is_64bit:
+                persistent_patch = self.persistent_patch_x64()
+            else:
+                persistent_patch = self.persistent_patch_x32()
+
+            # Add persistence handler to target function
+            utils.insert_patch_at_address(
+                self.target_func,
+                persistent_patch,
+                self.mappings,
+                rewriting_ctx
+            )
+        else:
+            if self.is_64bit:
+                non_persistent_patch = self.non_persistent_patch_x64()
+            else:
+                non_persistent_patch = self.non_persistent_patch_x32()
+
+            # Add non-persistent fuzzing handler to target function
+            utils.insert_patch_at_address(
+                self.target_func,
+                non_persistent_patch,
+                self.mappings,
+                rewriting_ctx
+            )
 
         # Add tracing code everywhere
         if self.is_64bit:
