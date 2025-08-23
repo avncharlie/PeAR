@@ -213,6 +213,7 @@ class AddWinAFLDataPass(Pass):
                 __afl_area: .space 0x10000
 
                 .section .data
+                .p2align 4 
                 p_mode_reg_backup: .space {p_mode_size}
                 p_mode_ret_addr_backup: .space {size}
 
