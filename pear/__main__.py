@@ -4,51 +4,48 @@ import os
 import sys
 import time
 import stat
-import json
 import logging
 import pathlib
 import textwrap
 import argparse
-from types import CodeType
-from gtirb import Symbol, CodeBlock
-import gtirb_rewriting._auxdata as _auxdata
-
-from collections import OrderedDict
 
 import gtirb
 
-from .utils import is_pie, get_address_to_byteblock_mappings
-from .ddisasm import ddisasm
 from . import REWRITERS, REWRITER_MAP, GEN_SCRIPT_OPTS
+from .utils import get_address_to_byteblock_mappings
+from .ddisasm import ddisasm
+from .preprocess import (
+    preprocess_add_function_names,
+    preprocess_rename_data_symbols,
+    preprocess_pe_delay_imports,
+    preprocess_pe_fix_ordinal_exports,
+)
 from .rewriters.rewriter import Rewriter
 from .arch_utils.linux_utils import fix_arm64_switches, LinuxUtils
 
 log = logging.getLogger(__package__)
 
-def setup_logger(log):
-    # TODO: remove this color stuff
-    green = '\033[92m'
-    blue = '\033[94m'
-    yellow = '\033[93m'
-    red = '\033[91m'
-    magenta = '\033[95m'
-    end = '\033[0m'
+def setup_logger(log, level=logging.INFO):
+    # ANSI colors
+    COLORS = {
+        'DEBUG': '\033[36m',    # Cyan
+        'INFO': '\033[94m',     # Blue
+        'WARNING': '\033[93m',  # Yellow
+        'ERROR': '\033[91m',    # Red
+        'CRITICAL': '\033[95m', # Magenta
+        'RESET': '\033[0m',
+    }
 
     class CustomFormatter(logging.Formatter):
-        LEVEL_COLORS = {
-            logging.INFO: blue,
-            logging.WARNING: yellow,
-            logging.ERROR: red,
-            logging.CRITICAL: magenta,
-        }
         def format(self, record):
-            color = self.LEVEL_COLORS.get(record.levelno, '')
-            log_msg = f"{color}{record.levelname} - {record.name} - {record.msg}{end}"
+            color = COLORS.get(record.levelname, '')
+            reset = COLORS['RESET']
+            log_msg = f"{color}{record.levelname} - {record.name} - {record.getMessage()}{reset}"
             return log_msg
+
     handler = logging.StreamHandler(sys.stdout)
-    formatter = CustomFormatter("%(levelname)s - %(name)s - %(message)s")
-    handler.setFormatter(formatter)
-    log.setLevel(logging.INFO)
+    handler.setFormatter(CustomFormatter())
+    log.setLevel(level)
     log.addHandler(handler)
 
 def main_descriptions():
@@ -115,6 +112,10 @@ Hint: running a docker container? Check volume mount location')
     required.add_argument(
         '--output-dir', required=True, type=path_exists,
         help="Empty directory to store temporary files and instrumentation results."
+    )
+    optional.add_argument(
+        '--debug', action='store_true', required=False,
+        help="Turn on debug logging."
     )
     optional.add_argument(
         '--ignore-nonempty', action='store_true', required=False,
@@ -189,64 +190,12 @@ Hint: running a docker container? Check volume mount location')
 
     return args
 
-def preprocess_fixp_data_align(ir: gtirb.IR):
-    '''
-    Fix issue breaking data alignment in jump tables by manually setting all
-    DataBlock's alignment to four.
-    More info here: https://github.com/GrammaTech/gtirb-rewriting/issues/15
-    :param ir: ir to fix
-    '''
-    module = ir.modules[0]
-    alignment = _auxdata.alignment.get_or_insert(module)
-    for db in module.data_blocks:
-        alignment[db] = 1
-
-def preprocess_add_function_names(ir: gtirb.IR, func_names: str):
-    # Make sure func mappings are typed correctly
-    # And subtract base address from func if PIE
-    fn: dict[int, str] = {}
-    with open(func_names) as f:
-        _funcmap = json.load(f)
-        b_addr = _funcmap['base_addr']
-        b_addr = int(b_addr, 16) if b_addr.startswith('0x') else int(b_addr)
-        for addr, name in _funcmap['func_map'].items():
-            if type(addr) == str:
-                addr = int(addr, 16) if addr.startswith('0x') else int(addr)
-            if is_pie(ir.modules[0]):
-                addr -= b_addr # subtract base address for PIE binaries
-            fn[addr] = name
-    # Rename functions
-    names_set = 0
-    module = ir.modules[0]
-    for f_id, entryBlocks in module.aux_data["functionEntries"].data.items():
-        for x in entryBlocks:
-            if type(x) == CodeBlock and x.address != None and x.address in fn:
-                name_sym = module.aux_data["functionNames"].data[f_id]
-                name_sym.name = fn[x.address]
-                names_set += 1
-    log.info(f"Set {names_set} function names using function map")
-
-# TODO make this a generic symbol renaming thing
-def preprocess_rename_data_symbols(ir: gtirb.IR, orig: list[str], repl: list[str]):
-    '''
-    Replace symbol names in orig with repl. Case insentive search
-    e.g. orig[X] -> repl[X]
-    '''
-    assert len(orig) == len(repl)
-    orig = [x.lower() for x in orig]
-    module = ir.modules[0]
-    elf_symbol_info: dict[Symbol, tuple[int, str, str, str, int]]
-    elf_symbol_info = _auxdata.elf_symbol_info.get_or_insert(module)
-    for sym, (_, symtype, binding, visibility, _) in elf_symbol_info.items():
-        name = sym.name
-        if binding == 'LOCAL' and visibility != 'HIDDEN' \
-                and symtype == 'OBJECT' and name.lower() in orig:
-            sym.name = repl[orig.index(name.lower())]
-            log.warning(f'Renaming data symbol "{name}" to "{sym.name}" to prevent issues on reassembly')
-
 if __name__ == "__main__":
-    setup_logger(log)
     args = parse_args()
+    setup_logger(log, level=logging.DEBUG if args.debug else logging.INFO)
+
+    if not args.gen_asm and not args.gen_binary:
+        log.warning('Neither --gen-asm or --gen-binary passed so nothing will be generated')
 
     # Generate (and cache) IR if binary provided
     if args.input_binary: 
@@ -314,6 +263,12 @@ if __name__ == "__main__":
         preprocess_rename_data_symbols(ir, orig, repl)
         # offset is special keyword for gcc
         preprocess_rename_data_symbols(ir, ['offset'], ['_offset'])
+    if ir.modules[0].file_format == gtirb.Module.FileFormat.PE:
+        if not args.input_binary:
+            log.error("If rewriting PE files, please pass original binary (as well as IR if you have it)")
+            exit()
+        preprocess_pe_delay_imports(ir, args.input_binary)
+        preprocess_pe_fix_ordinal_exports(ir)
 
     # Run chosen rewriter
     rewriter: Rewriter = args.rewriter(ir, args, mappings, args.gen_build_script)

@@ -13,7 +13,7 @@ from enum import Enum
 from typing import NamedTuple
 
 from ..utils import run_cmd, check_executables_exist
-from .conftest import windows_only, get_gen_binary_from_pear_output
+from .conftest import windows_only, get_gen_binary_from_pear_output, devcmd_bat
 
 TEST_PROG_DIR = importlib.resources.files(__package__) / 'test_fuzz'
 WINAFL_TIMEOUT=30
@@ -24,23 +24,6 @@ class TargetProgram(NamedTuple):
     binary_path: str
     corpus: str
     target_func_address: int
-
-@pytest.fixture
-def devcmd_bat(arch: gtirb.Module.ISA,
-               vcvarsall_loc: str,
-               tmp_path_factory: pytest.TempPathFactory) -> str:
-    '''
-    Build bat file used to initialise MSVC environment for given architecture
-    '''
-    base = tmp_path_factory.mktemp('bat_files')
-    if arch == gtirb.Module.ISA.IA32:
-        arch_opt = 'x86'
-    elif arch == gtirb.Module.ISA.X64:
-        arch_opt = 'x64'
-    bat = base / f"dev{arch.value}.bat"
-    with open(bat, 'w') as f:
-        f.write('"' + vcvarsall_loc + f'" {arch_opt}')
-    return bat
 
 def get_func_address_in_disasm(prog_path: str, devcmd_bat: str,
                                func_name: str) -> int:

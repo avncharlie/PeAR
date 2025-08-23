@@ -13,13 +13,13 @@ from ..utils import run_cmd
 from ..ddisasm import ddisasm
 from .conftest import linux_only, docker_installed, get_gen_binary_from_pear_output
 
-TEST_IDENTIY_DIR = importlib.resources.files(__package__) / 'test_identity'
+TEST_IDENTIY_DIR = importlib.resources.files(__package__) / 'test_identity_linux'
 BIN_NAME = 'foo'
 BUILD_LIBFOO = ['gcc', '-shared', '-fPIC', 'libfoo.c', '-o', 'libfoo.so', '-nodefaultlibs']
 BUILD_FOO_BASE = ['gcc', '-o', BIN_NAME, 'main.c', '-Wl,--no-as-needed', '-L.', '-lfoo']
 
 @linux_only
-def test_identity_simple(tmp_path_factory: pytest.TempPathFactory,
+def test_linux_identity_simple(tmp_path_factory: pytest.TempPathFactory,
                          ir_cache: bool):
     build_dir = tmp_path_factory.mktemp('build')
     shutil.copytree(TEST_IDENTIY_DIR, build_dir, dirs_exist_ok=True)
@@ -45,7 +45,7 @@ def test_identity_simple(tmp_path_factory: pytest.TempPathFactory,
     assert r == 0 and b'foo is: 42\n' in out and b'foo is: 420\n' in out
 
 @linux_only
-def test_identity_complex(tmp_path_factory: pytest.TempPathFactory,
+def test_linux_identity_complex(tmp_path_factory: pytest.TempPathFactory,
                          ir_cache: bool):
     build_dir = tmp_path_factory.mktemp('build')
     shutil.copytree(TEST_IDENTIY_DIR, build_dir, dirs_exist_ok=True)
@@ -153,7 +153,7 @@ def run_docker_test(docker_image: str,
 
 @linux_only
 @docker_installed
-def test_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory,
+def test_linux_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory,
                                     ir_cache: bool):
 
     run_docker_test(
@@ -167,7 +167,7 @@ def test_identity_on_gtirb_pprinter(tmp_path_factory: pytest.TempPathFactory,
 
 @linux_only
 @docker_installed
-def test_identity_on_ls(tmp_path_factory: pytest.TempPathFactory, ir_cache:
+def test_linux_identity_on_ls(tmp_path_factory: pytest.TempPathFactory, ir_cache:
                         bool):
     run_docker_test(
         docker_image="ubuntu:24.04",
@@ -180,7 +180,7 @@ def test_identity_on_ls(tmp_path_factory: pytest.TempPathFactory, ir_cache:
 
 @linux_only
 @docker_installed
-def test_identity_ctors_dtors(tmp_path_factory: pytest.TempPathFactory,
+def test_linux_identity_ctors_dtors(tmp_path_factory: pytest.TempPathFactory,
                               ir_cache: bool):
     # The ls binary from Ubuntu 12.04 has a ctors/dtors section, which we test
     # we can handle correctly

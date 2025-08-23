@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 
 from .arch_utils import ArchUtils
-from ..utils import run_cmd, check_executables_exist
+from ..utils import run_cmd, check_executables_exist, find_symbol
 from .. import DUMMY_LIB_NAME
 
 import gtirb_rewriting._auxdata as _auxdata
@@ -68,6 +68,7 @@ class WindowsUtils(ArchUtils):
                 for func in exports[lib]:
                     if func.split('@')[0] == lib[:-4]:
                         # Import by ordinal
+                        # TODO: use the peImportEntries tuple correctly (2nd item is if it is ordinal or not)
                         ordinal = func.split('@')[1]
                         f.write(f'    {func} @ {ordinal} NONAME\n')
                     else:
@@ -116,11 +117,21 @@ class WindowsUtils(ArchUtils):
         """
         assert len(ir.modules) == 1
         module = ir.modules[0]
+        pe_export_entries = module.aux_data['peExportEntries'].data
         export_funcs = []
-        for _, _, func_name in module.aux_data['peExportEntries'].data:
-            export_funcs.append(func_name)
+        for _, ordinal, func_name in pe_export_entries:
+            if not func_name:
+                # ordinal export
+                ord_name = f"{module.name[:-4]}@{ordinal}"
+                export_funcs.append(ord_name)
+            else:
+                # name export
+                export_funcs.append(func_name)
         if export_funcs:
             exports = {module.name: export_funcs}
+
+            print(exports)
+
             return WindowsUtils.generate_def_files(exports, out_folder)
         return {}
 

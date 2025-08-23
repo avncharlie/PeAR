@@ -14,7 +14,7 @@ import gtirb
 import gtirb_rewriting._auxdata as _auxdata
 import cpp_demangle
 
-from gtirb import Module
+from gtirb import Module, ByteBlock
 from gtirb.symbol import Symbol
 import gtirb_functions
 from gtirb_rewriting import (
@@ -45,6 +45,8 @@ def demangle(mangled: str):
     """
     Attempt to demangle C++ name using cpp_demangle python lib.
     Return original if not cpp name
+    :param mangled: mangled C++ name
+    :return: unmangled name or original
     """
     global CPP_FILT_WARNING
     if not mangled.startswith('_Z'):
@@ -59,6 +61,18 @@ def demangle(mangled: str):
             return mangled
         # fallback to c++filt
         return cppfilt_demangle(mangled)
+
+def find_symbol(ir: gtirb.IR, block: ByteBlock) -> Symbol | None:
+    '''
+    Find Symbol corresponding to ByteBlock
+    :param ir: IR to search within
+    :param block: block to find symbol corresponding to
+    :returns: corresponding or None if could not find
+    '''
+    for sym in ir.symbols:
+        if sym._payload == block:
+            return sym
+    return None
 
 def is_pie(module: Module):
     binary_type = _auxdata.binary_type.get_or_insert(module)

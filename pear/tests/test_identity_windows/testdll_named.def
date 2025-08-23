@@ -1,0 +1,4 @@
+LIBRARY "testdll.dll"
+EXPORTS
+    read_and_test_file @1
+    test_func          @2

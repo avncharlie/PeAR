@@ -1,6 +1,7 @@
 import pytest
 import platform
 
+import gtirb
 from ..utils import run_cmd
 
 def pytest_addoption(parser):
@@ -35,6 +36,24 @@ def hide_afl_ui(request) -> bool:
 @pytest.fixture
 def ir_cache(request) -> bool:
     return request.config.getoption("--ir-cache")
+
+@pytest.fixture
+def devcmd_bat(arch: gtirb.Module.ISA,
+               vcvarsall_loc: str,
+               tmp_path_factory: pytest.TempPathFactory) -> str:
+    '''
+    Build bat file used to initialise MSVC environment for given architecture
+    '''
+    base = tmp_path_factory.mktemp('bat_files')
+    if arch == gtirb.Module.ISA.IA32:
+        arch_opt = 'x86'
+    elif arch == gtirb.Module.ISA.X64:
+        arch_opt = 'x64'
+    bat = base / f"dev{arch.value}.bat"
+    with open(bat, 'w') as f:
+        f.write('"' + vcvarsall_loc + f'" {arch_opt}')
+    return bat
+
 
 windows_only = pytest.mark.skipif(
     platform.system() != 'Windows', reason="Windows only test"
