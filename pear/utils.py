@@ -62,7 +62,7 @@ def demangle(mangled: str):
         # fallback to c++filt
         return cppfilt_demangle(mangled)
 
-def find_symbol(ir: gtirb.IR, block: ByteBlock) -> Symbol | None:
+def find_symbol(ir: gtirb.IR, block: ByteBlock) -> Optional[Symbol]:
     '''
     Find Symbol corresponding to ByteBlock
     :param ir: IR to search within
