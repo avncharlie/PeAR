@@ -24,7 +24,7 @@ output_basename=$(basename "$output_full_path")
 options="${@:2:$(($#-2))}"
 
 # Run the Docker command
-docker run --rm -it \
+docker run --rm \
     --user "$USER_ID:$GROUP_ID" \
     -v "$input_basedir":/input \
     -v "$output_basedir":/output \

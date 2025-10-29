@@ -116,15 +116,24 @@ class LinuxUtils(ArchUtils):
             with open(asm_p, 'w') as f:
                 text = '.section .text\n\n'
                 data = '.section .data\n\n'
-                
+                generated_names = set()
+
                 for version, symlist in versions.items():
                     for sym in symlist:
                         name = sym.name
+                        # Skip duplicate symbol names
+                        if name in generated_names:
+                            continue
+                        generated_names.add(name)
                         symsize, symtype, _, _, _ = elf_symbol_info[sym]
                         if symtype == 'FUNC':
                             text += LinuxUtils.generate_asm_external_symbol_stub(name, is_func=True, version=version)
-                        elif symtype == 'OBJECT':
+                        elif symtype == 'OBJECT' or symtype == 'NOTYPE':
+                            if symtype == 'NOTYPE':
+                                log.warn(f"Symbol \"{name}\" has no type, treating as data object")
                             data += LinuxUtils.generate_asm_external_symbol_stub(name, is_func=False, version=version, size=symsize)
+                        else:
+                            log.warn(f"Unknown symbol type {symtype} for symbol {name}, ignoring...")
                 f.write(text)
                 f.write(data)
             log.info(f"Generated assembly for dummy {lib} at: {asm_p}")
@@ -132,7 +141,12 @@ class LinuxUtils(ArchUtils):
             with open(version_map_p, 'w') as f:
                 for version, symlist in versions.items():
                     f.write(version + " {\n  global:\n") #}
+                    version_names = set()
                     for sym in symlist:
+                        # Skip duplicate symbol names in version map
+                        if sym.name in version_names:
+                            continue
+                        version_names.add(sym.name)
                         f.write(f"    {sym.name};\n")
                     f.write("};\n\n")
             log.info(f"Generated version map for dummy {lib} at: {version_map_p}")
@@ -280,13 +294,22 @@ class LinuxUtils(ArchUtils):
         # it doesn't matter what library we generate them under
         text = '.section .text\n\n'
         data = '.section .data\n\n'
+        nonversioned_names = set()
         for sym in nonversioned_syms:
             name = sym.name
+            # Skip duplicate symbol names
+            if name in nonversioned_names:
+                continue
+            nonversioned_names.add(name)
             symsize, symtype, _, _, _ = elf_symbol_info[sym]
             if symtype == 'FUNC':
                 text += LinuxUtils.generate_asm_external_symbol_stub(name, is_func=True)
-            elif symtype == 'OBJECT':
+            elif symtype == 'OBJECT' or symtype == 'NOTYPE':
+                if symtype == 'NOTYPE':
+                    log.warn(f"Symbol \"{name}\" has no type, treating as data object")
                 data += LinuxUtils.generate_asm_external_symbol_stub(name, is_func=False, size=symsize)
+            else:
+                log.warn(f"Symbol \"{name}\" has unknown type, ignoring it.")
         non_versioned_stubs = text + data
         added_non_versioned_stubs = False
 

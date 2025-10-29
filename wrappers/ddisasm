@@ -10,7 +10,7 @@ GROUP_ID=$(id -g)
 
 # If less than 3 args, pass directly (interactive mode)
 if [ "$#" -lt 3 ]; then
-    docker run --rm -it \
+    docker run --rm \
         --user "$USER_ID:$GROUP_ID" \
         -v "$(pwd)":/workspace \
         grammatech/ddisasm ddisasm "$@"
@@ -64,7 +64,7 @@ output_basedir=$(dirname "$output_full_path")
 output_basename=$(basename "$output_full_path")
 
 # shellcheck disable=SC2086
-docker run --rm -it \
+docker run --rm \
     --user "$USER_ID:$GROUP_ID" \
     -v "$input_basedir":/input \
     -v "$output_basedir":/output \
