@@ -224,6 +224,7 @@ class LinuxUtils(ArchUtils):
             fix_riz_register(asm_fname)
             if is_arm64:
                 fix_arm64_pprinter_simd(asm_fname)
+                relax_arm64_branches(asm_fname)
             log.info(f'Generated assembly saved to: {asm_fname}')
 
         if not gen_binary:
@@ -845,6 +846,82 @@ def fix_arm64_pprinter_simd(asm_f):
 
     with open(asm_f, 'w') as f:
         f.write(asm)
+
+_COND_INVERT = {
+    'eq': 'ne', 'ne': 'eq',
+    'cs': 'cc', 'cc': 'cs',
+    'hs': 'lo', 'lo': 'hs',
+    'mi': 'pl', 'pl': 'mi',
+    'vs': 'vc', 'vc': 'vs',
+    'hi': 'ls', 'ls': 'hi',
+    'ge': 'lt', 'lt': 'ge',
+    'gt': 'le', 'le': 'gt',
+}
+
+def relax_arm64_branches(asm_f):
+    '''
+    ARM64 conditional branches have limited range (tbnz/tbz ±32KB,
+    cbz/cbnz/b.cond ±1MB). Instrumentation can inflate binaries enough
+    to push targets out of range. GAS does not auto-relax these.
+
+    Replace every conditional branch with an inverted short branch over
+    an unconditional b (±128MB range):
+        tbnz Rn,#imm,target  ->  tbz Rn,#imm,.Lrelax_N / b target / .Lrelax_N:
+        cbz Rn,target         ->  cbnz Rn,.Lrelax_N / b target / .Lrelax_N:
+        b.cond target         ->  b.!cond .Lrelax_N / b target / .Lrelax_N:
+    '''
+    with open(asm_f, 'r') as f:
+        lines = f.readlines()
+
+    trampoline_id = 0
+    new_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        # tbnz/tbz
+        m = re.match(r'(tbnz|tbz)\s+(\w+),#(\d+),(\S+)', stripped)
+        if m:
+            instr, reg, bit, target = m.groups()
+            inv = 'tbz' if instr == 'tbnz' else 'tbnz'
+            skip = f'.Lrelax_{trampoline_id}'
+            trampoline_id += 1
+            new_lines.append(f'            {inv} {reg},#{bit},{skip}\n')
+            new_lines.append(f'            b {target}\n')
+            new_lines.append(f'{skip}:\n')
+            continue
+
+        # cbz/cbnz
+        m = re.match(r'(cbz|cbnz)\s+(\w+),(\S+)', stripped)
+        if m:
+            instr, reg, target = m.groups()
+            inv = 'cbnz' if instr == 'cbz' else 'cbz'
+            skip = f'.Lrelax_{trampoline_id}'
+            trampoline_id += 1
+            new_lines.append(f'            {inv} {reg},{skip}\n')
+            new_lines.append(f'            b {target}\n')
+            new_lines.append(f'{skip}:\n')
+            continue
+
+        # b.cond
+        m = re.match(r'b\.(\w+)\s+(\S+)', stripped)
+        if m:
+            cond, target = m.groups()
+            if cond in _COND_INVERT:
+                inv_cond = _COND_INVERT[cond]
+                skip = f'.Lrelax_{trampoline_id}'
+                trampoline_id += 1
+                new_lines.append(f'            b.{inv_cond} {skip}\n')
+                new_lines.append(f'            b {target}\n')
+                new_lines.append(f'{skip}:\n')
+                continue
+
+        new_lines.append(line)
+
+    with open(asm_f, 'w') as f:
+        f.writelines(new_lines)
+
+    log.info(f'Relaxed {trampoline_id} conditional branch(es) with trampolines')
 
 def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
     '''
