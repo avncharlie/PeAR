@@ -222,6 +222,8 @@ class LinuxUtils(ArchUtils):
             if switch_data:
                 expand_arm64_switches(asm_fname, switch_data)
             fix_riz_register(asm_fname)
+            if is_arm64:
+                fix_arm64_pprinter_simd(asm_fname)
             log.info(f'Generated assembly saved to: {asm_fname}')
 
         if not gen_binary:
@@ -804,6 +806,44 @@ def fix_riz_register(asm_f):
         rep = ('+RIZ*'+str(s)+']').encode()
         asm = asm.replace(rep, b']')
     with open(asm_f, 'wb') as f:
+        f.write(asm)
+
+def fix_arm64_pprinter_simd(asm_f):
+    '''
+    gtirb-pprinter drops lane qualifiers on bare vN SIMD registers in several
+    ARM64 instructions, causing assembly errors. This fixes the known patterns:
+      - fmov vN,xN  -> fmov vN.d[1],xN   (GPR to upper SIMD half)
+      - fmov xN,vN  -> fmov xN,vN.d[1]   (upper SIMD half to GPR)
+      - mov xN,vN   -> mov xN,vN.d[0]    (umov 64-bit, index 0)
+      - mov wN,vN   -> mov wN,vN.s[0]    (umov 32-bit, index 0)
+    Also warns on dup with bare vN source, which can't be fixed without knowing
+    the original lane index.
+    '''
+    with open(asm_f, 'r') as f:
+        asm = f.read()
+
+    # fmov vN,xN -> fmov vN.d[1],xN
+    asm, n1 = re.subn(r'\bfmov (v\d+),(x\d+)', r'fmov \1.d[1],\2', asm)
+    # fmov xN,vN -> fmov xN,vN.d[1]  (only bare vN, not vN.d[1] or v3 inside v31)
+    asm, n2 = re.subn(r'\bfmov (x\d+),(v\d+)(?![.\d])', r'fmov \1,\2.d[1]', asm)
+    # mov xN,vN -> mov xN,vN.d[0]  (only bare vN, not inside fmov)
+    asm, n3 = re.subn(r'(?<![f])mov (x\d+),(v\d+)(?![.\d])', r'mov \1,\2.d[0]', asm)
+    # mov wN,vN -> mov wN,vN.s[0]  (only bare vN, not inside fmov)
+    asm, n4 = re.subn(r'(?<![f])mov (w\d+),(v\d+)(?![.\d])', r'mov \1,\2.s[0]', asm)
+
+    total = n1 + n2 + n3 + n4
+    if total > 0:
+        log.info(f'Fixed {total} SIMD lane qualifier(s) dropped by gtirb-pprinter '
+                 f'(fmov vN,xN: {n1}, fmov xN,vN: {n2}, mov xN,vN: {n3}, mov wN,vN: {n4})')
+
+    # Warn on dup with bare vN source (can't fix without knowing lane index)
+    dup_matches = re.findall(r'dup (v\d+\.\w+),(v\d+)(?!\.)', asm)
+    if dup_matches:
+        log.warning(f'Found {len(dup_matches)} dup instruction(s) with bare vN source '
+                    f'register (missing lane qualifier). These cannot be automatically '
+                    f'fixed and will cause assembly errors.')
+
+    with open(asm_f, 'w') as f:
         f.write(asm)
 
 def expand_arm64_switches(asm_f: str, switches: list[SwitchData]):
