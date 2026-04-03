@@ -239,11 +239,12 @@ if __name__ == "__main__":
         elif ir.modules[0].file_format == gtirb.Module.FileFormat.ELF:
             build_script += '.sh'
             with open(build_script, 'w') as f:
-                f.write('#!/bin/bash\nset -x\n')
+                f.write('#!/bin/bash\nset -ex\ncd "$(dirname "$0")"\n')
             # make executable
             st = os.stat(build_script)
             os.chmod(build_script, st.st_mode | stat.S_IEXEC)
         GEN_SCRIPT_OPTS.gen_output = build_script
+        GEN_SCRIPT_OPTS.output_dir = os.path.abspath(args.output_dir)
 
     # pre-process ARM64 binaries to fix switch identification
     switches = None

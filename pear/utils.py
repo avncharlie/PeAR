@@ -104,10 +104,13 @@ def log_cmd(cmd: list[str],
         assert GEN_SCRIPT_OPTS.gen_output != None
         with open(GEN_SCRIPT_OPTS.gen_output, 'a') as f:
             assert not env_vars, "setting env vars in build script not implemented"
-            if working_dir:
-                cmd_str = f'pushd {working_dir}\n{cmd_str}\npopd'
-            cmd_str += '\n'
-            f.write(cmd_str)
+            # Make paths relative to the output directory
+            script_cmd_str = cmd_str
+            if GEN_SCRIPT_OPTS.output_dir:
+                script_cmd_str = script_cmd_str.replace(GEN_SCRIPT_OPTS.output_dir + '/', './')
+                script_cmd_str = script_cmd_str.replace(GEN_SCRIPT_OPTS.output_dir, '.')
+            script_cmd_str += '\n'
+            f.write(script_cmd_str)
             
     log.info(f"{executing}{extra}: " + fmt_cmd)
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 class GenScriptOptions:
     is_dry_run: bool = False
     gen_output: str = ''
+    output_dir: str = ''
 
 # Usage
 GEN_SCRIPT_OPTS = GenScriptOptions()
