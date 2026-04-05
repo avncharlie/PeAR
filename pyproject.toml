@@ -6,10 +6,9 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "cpp-demangle",
-    "gtirb-rewriting>=0.1.2,<0.4",
+    "gtirb-rewriting>=0.4.1",
     "pefile",
     "pytest",
-    "setuptools<81", # needed to build capstone_gt
 ]
 
 [build-system]
