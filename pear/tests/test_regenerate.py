@@ -25,7 +25,7 @@ def test_regenerate(tmp_path_factory: pytest.TempPathFactory,
     with open(code_path, 'w') as f:
         f.write(BUGGY)
 
-    cmd = ['gcc', '-o', bin_path, code_path]
+    cmd = ['gcc', '-O0', '-o', bin_path, code_path]
     run_cmd(cmd)
     ir_cache_arg = []
     if ir_cache:
