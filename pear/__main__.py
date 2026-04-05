@@ -190,7 +190,7 @@ Hint: running a docker container? Check volume mount location')
 
     return args
 
-if __name__ == "__main__":
+def main():
     args = parse_args()
     setup_logger(log, level=logging.DEBUG if args.debug else logging.INFO)
 
@@ -285,3 +285,6 @@ if __name__ == "__main__":
 
     if args.gen_build_script:
         log.info(f"Build script saved to: {build_script}")
+
+if __name__ == "__main__":
+    main()
