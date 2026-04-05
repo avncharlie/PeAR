@@ -23,9 +23,9 @@ class RegenerateRewriter(Rewriter):
     """
     Rewriter that regenerates a binary from instrumented assembly source.
     """
-    @staticmethod
-    def build_parser(parser: argparse._SubParsersAction):
-        parser = parser.add_parser(RegenerateRewriter.name(),
+    @classmethod
+    def build_parser(cls, parser: argparse._SubParsersAction):
+        parser = parser.add_parser(cls.name(),
                                    help='Regenerate binary from instrumented assembly source')
         parser.description = textwrap.dedent("""\
             Regenerate binary from assembly source. Will attempt to regenerate binary with

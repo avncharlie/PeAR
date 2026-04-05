@@ -58,9 +58,9 @@ class TraceRewriter(Rewriter):
     """
     This class implements tracing instrumentation on Linux binaries.
     """
-    @staticmethod
-    def build_parser(parser: argparse._SubParsersAction):
-        parser = parser.add_parser(TraceRewriter.name(),
+    @classmethod
+    def build_parser(cls, parser: argparse._SubParsersAction):
+        parser = parser.add_parser(cls.name(),
                                    description= "Add tracing instrumentation to Linux binaries.",
                                    help='Add coverage instrumentation')
         parser.add_argument(

@@ -66,10 +66,10 @@ class AFLPlusPlusRewriter(Rewriter):
             See the tests within PeAR for AFL++ rewriter for example usage.
         ''')
 
-    @staticmethod
-    def build_parser(parser: argparse._SubParsersAction):
-        parser = parser.add_parser(AFLPlusPlusRewriter.name(),
-                                   description=AFLPlusPlusRewriter.get_description(),
+    @classmethod
+    def build_parser(cls, parser: argparse._SubParsersAction):
+        parser = parser.add_parser(cls.name(),
+                                   description=cls.get_description(),
                                    formatter_class=argparse.RawTextHelpFormatter,
                                    help='Add AFL++ instrumentation')
 

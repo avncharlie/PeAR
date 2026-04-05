@@ -23,9 +23,9 @@ class IdentityRewriter(Rewriter):
     Rewriter that doesn't apply any tranformation, just lifts the binary to IR
     before attempting to generate it.
     """
-    @staticmethod
-    def build_parser(parser: argparse._SubParsersAction):
-        parser = parser.add_parser(IdentityRewriter.name(),
+    @classmethod
+    def build_parser(cls, parser: argparse._SubParsersAction):
+        parser = parser.add_parser(cls.name(),
                                    help='Parse then regenerate binary')
         parser.description = """\
 Lift binary to GTIRB IR then attempt to generate it.
