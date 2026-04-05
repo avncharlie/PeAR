@@ -39,9 +39,9 @@ class WinAFLRewriter(Rewriter):
     """
     This class implements WinAFL instrumentation on x86 and x64 Windows binaries.
     """
-    @staticmethod
-    def build_parser(parser: argparse._SubParsersAction):
-        parser = parser.add_parser(WinAFLRewriter.name(),
+    @classmethod
+    def build_parser(cls, parser: argparse._SubParsersAction):
+        parser = parser.add_parser(cls.name(),
                                    description= "Add WinAFL instrumentation to 32-bit or 64-bit Windows binaries.",
                                    help='Add WinAFL instrumentation',
                                    add_help=False)

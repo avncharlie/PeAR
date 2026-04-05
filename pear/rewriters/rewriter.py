@@ -60,8 +60,8 @@ class Rewriter:
         """
         raise NotImplementedError
 
-    @staticmethod
-    def build_parser(parser: argparse._SubParsersAction):
+    @classmethod
+    def build_parser(cls, parser: argparse._SubParsersAction):
         """
         Set up arparse parser for rewriter-specific arguments.
         Method should add subparser parser to given main parser.

@@ -33,9 +33,9 @@ class DebugRewriter(Rewriter):
     Rewriter that doesn't apply any tranformation, just lifts the binary to IR
     before attempting to generate it.
     """
-    @staticmethod
-    def build_parser(parser: argparse._SubParsersAction):
-        parser = parser.add_parser(DebugRewriter.name(),
+    @classmethod
+    def build_parser(cls, parser: argparse._SubParsersAction):
+        parser = parser.add_parser(cls.name(),
                                    help='dbg')
 
         parser.add_argument(
