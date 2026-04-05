@@ -94,7 +94,7 @@ original binary's properties.
 1. Make sure docker is installed and you can run it non-root.
 2. Install python 3, max version python 3.10.
 3. (Optional but recommended) Create a virtual environment to run PeAR in.
-4. Install dependencies with `python -m pip install -r requirements.txt`.
+4. Install dependencies with `python -m pip install .`.
 4. Run using `./PeAR.sh`. This shell script sets up wrappers for `ddisasm` and
    `gtirb-pprinter` that passthrough to docker.
 
@@ -107,7 +107,7 @@ To use the wrappers yourself, run `source ./enable_wrappers.sh`. Then run
    your PATH.
 3. Install python 3, max version python 3.10.
 4. (Optional but recommended) Create a virtual environment to run PeAR in.
-5. Install dependencies with `python -m pip install -r requirements.txt`.
+5. Install dependencies with `python -m pip install .`.
 6. Run `python -m pear -h` or `.\PeAR.bat -h` to get started.
 
 ## Run tests

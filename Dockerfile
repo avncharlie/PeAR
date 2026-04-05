@@ -9,8 +9,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # and easy installation
 RUN apt-get update && apt-get install -y python3.9 python3-pip
 
-COPY requirements.txt .
-RUN python3.9 -m pip install -r requirements.txt
+COPY pyproject.toml /pear/pyproject.toml
+RUN python3.9 -m pip install /pear
 
 # Example invocation:
 # docker run --platform linux/amd64 --rm -v $(pwd)/pear:/pear -v $(pwd):/w -it pear python3.9 -m pear --ir-cache /w/ir_cache --input-binary /w/in/switch_test/byte_switch --output-dir /w/out --gen-binary --gen-build-script --ignore-nonempty Identity
