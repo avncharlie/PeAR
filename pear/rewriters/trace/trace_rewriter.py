@@ -18,7 +18,7 @@ from typing import Optional
 import gtirb
 import gtirb_functions
 
-from capstone_gt import CsInsn
+from gtirb_capstone.capstone_compatibility import capstone
 from gtirb import CodeBlock
 from gtirb_functions import Function
 from gtirb_rewriting import (
@@ -128,7 +128,7 @@ class TraceRewriter(Rewriter):
     def get_block_asm(self, 
                       func_map: dict[CodeBlock, str],
                       multi_entry_func_map: list[tuple[list[CodeBlock], str]],
-                      start_addr: int, ins: list[CsInsn], cb: CodeBlock) -> tuple[str, str]:
+                      start_addr: int, ins: list[capstone.CsInsn], cb: CodeBlock) -> tuple[str, str]:
         """
         Return dissasembly string of a codeblock
         Returns (disassembly, label)
